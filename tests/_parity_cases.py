@@ -25,6 +25,17 @@ out = {
     "growth": [{"cost": make_figures.growth_series()[1], "resets": make_figures.growth_series()[2]},
                {"cost": make_figures.growth_series(reset_at=90000)[1], "resets": make_figures.growth_series(reset_at=90000)[2]}],
 }
+import orgspec  # noqa: E402
+orgs = {}
+for name in ("org_before.json", "org_after.json", "demo/org.txt", "demo/org_after.txt"):
+    org, _ = orgspec.load_org(os.path.join(ROOT, "samples", name))
+    orgs[name] = org
+out["orgs"] = {k: {"org": v, "result": {kk: vv for kk, vv in orgopt.evaluate_org(v, grok).items()
+                                        if kk in ("total_eq", "total_usd", "output_usd")},
+                   "bots": {r["bot"]: r["cost_eq"] for r in orgopt.evaluate_org(v, grok)["bots"]},
+                   "haiku": orgopt.evaluate_org(v, pricing["claude-haiku-5-5"])["total_eq"],
+                   "sol": orgopt.evaluate_org(v, pricing["gpt-6.1-sol"])["total_eq"]}
+               for k, v in orgs.items()}
 for r in out["board"]:
     r.pop("extra_tokens_per_notification", None)
 for r in out["reset"]:

@@ -50,5 +50,37 @@ const g = PRESETS["grok-4.7"];
 deep(calc.growthCost(g, { c0: 20000, growth: 15000, wakesPerDay: 10, days: 14 }), py.growth[0], "growth no reset");
 deep(calc.growthCost(g, { c0: 20000, growth: 15000, wakesPerDay: 10, days: 14, resetAt: 90000 }), py.growth[1], "growth reset");
 
-console.log(`${checks - failures}/${checks} checks match the Python model`);
-process.exit(failures ? 1 : 0);
+for (const [name, ref] of Object.entries(py.orgs)) {
+  const r = calc.evaluateOrg(ref.org, g);
+  deep({ total_eq: r.total_eq, total_usd: r.total_usd, output_usd: r.output_usd }, ref.result, `org ${name}`);
+  for (const row of r.bots) same(row.cost_eq, ref.bots[row.bot], `org ${name} bot ${row.bot}`);
+  same(calc.evaluateOrg(ref.org, PRESETS["claude-haiku-5-5"]).total_eq, ref.haiku, `org ${name} haiku`);
+  same(calc.evaluateOrg(ref.org, PRESETS["gpt-6.1-sol"]).total_eq, ref.sol, `org ${name} gpt-6.1-sol`);
+}
+
+// Guided mode: every generated team is a valid org, and no fix ever raises the bill.
+import("../docs/calculator/team.js").then((team) => {
+  const opts = { team: ["pipeline", "manager", "support"], busy: ["quiet", "busy"], age: ["fresh", "month"],
+                 acks: ["never", "usually"], board: ["no", "yes"], group: ["none", "long"], relay: ["no", "yes"] };
+  let combos = [{ model: "grok-4.7" }];
+  for (const [k, vals] of Object.entries(opts)) combos = combos.flatMap((c) => vals.map((v) => ({ ...c, [k]: v })));
+  for (const a of combos) {
+    const p = PRESETS[a.model];
+    const fixes = team.applicableFixes(a);
+    const r = team.analyze(a, new Set(fixes), p);
+    checks += 1;
+    if (r.after.totalUsd > r.now.totalUsd + 1e-9) { failures += 1; console.error("fixes raised the bill", a); }
+    for (const f of fixes) {
+      checks += 1;
+      if (r.alone[f] < -1e-9) { failures += 1; console.error(`fix ${f} raised the bill`, a); }
+    }
+  }
+  const sample = team.buildOrg({ ...team.DEFAULTS, relay: "yes", group: "long" });
+  const pyCheck = execFileSync("python3", ["-c",
+    "import json,sys; sys.path.insert(0,'core'); import orgspec; e,w=orgspec.validate_org(json.load(sys.stdin)); print(len(e))"],
+    { input: JSON.stringify(sample), cwd: root, encoding: "utf8" }).trim();
+  checks += 1;
+  if (pyCheck !== "0") { failures += 1; console.error("generated team fails Python validation"); }
+  console.log(`${checks - failures}/${checks} checks pass (Python parity + guided mode, ${combos.length} answer combinations)`);
+  process.exit(failures ? 1 : 0);
+});

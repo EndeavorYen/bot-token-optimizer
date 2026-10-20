@@ -3,348 +3,594 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bot Token Calculator</title>
-<meta name="description" content="What-if calculator for the token cost of persistent bots: context growth, board round-trips, relay leaders, span of control, hand-overs.">
+<title>Bot Token Checkup</title>
+<meta name="description" content="Answer six plain questions about your bots and see what they cost per week, which habits waste tokens, and what to tell your bots to fix it.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #F6F7F9; --card: #FFFFFF; --ink: #111827; --muted: #6B7280; --line: #E5E7EB;
-    --bad: #E4572E; --good: #2E86AB; --warn: #F2A541; --neutral: #A3AAB5; --accent-bg: #0F172A;
-    --field: #F3F4F6;
+    --paper: #F2F5F4; --sheet: #FFFFFF; --ink: #1B2430; --soft: #5C6773; --faint: #8A949E; --rule: #DCE2E5;
+    --field: #E8EDEC; --leak: #D7385E; --leak-wash: #FBE7EC; --save: #0F8B8D; --save-wash: #E1F2F2;
+    --amber: #E19A2C; --flow: #9AA6B1; --chip: #FFFFFF; --on: #1B2430; --on-ink: #FFFFFF;
+    --shadow: 0 1px 2px rgba(27, 36, 48, .06), 0 12px 32px -12px rgba(27, 36, 48, .18);
+    --ease: cubic-bezier(.2, .7, .2, 1);
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #0B0F17; --card: #131A26; --ink: #E5E7EB; --muted: #9CA3AF; --line: #263041;
-      --field: #1B2433; --good: #5DADE2; }
+    :root { --paper: #0E1620; --sheet: #15202C; --ink: #E6ECEF; --soft: #A7B2BC; --faint: #7C8893; --rule: #263443;
+      --field: #1D2A38; --leak: #F0587A; --leak-wash: #3A1A25; --save: #3CC1C3; --save-wash: #10302F;
+      --flow: #5D6B78; --chip: #1A2633; --on: #E6ECEF; --on-ink: #0E1620; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 16px 40px -16px rgba(0,0,0,.6); }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink);
-    font: 15px/1.55 Inter, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; }
-  header { background: var(--accent-bg); color: #F8FAFC; padding: 28px 16px 24px; }
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
-  header .wrap { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between; padding: 0; }
-  h1 { margin: 0; font: 800 26px/1.2 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; }
-  header p { margin: 6px 0 0; color: #94A3B8; max-width: 620px; }
-  .formula { display: inline-block; margin-top: 12px; padding: 6px 14px; border-radius: 999px; background: #1E293B;
-    color: var(--warn); font-weight: 600; font-size: 14px; }
-  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-  select, input { font: inherit; color: var(--ink); background: var(--field); border: 1px solid var(--line);
-    border-radius: 8px; padding: 6px 8px; }
-  header select { background: #1E293B; color: #F8FAFC; border-color: #334155; }
-  .lang button { font: inherit; border: 1px solid #334155; background: transparent; color: #CBD5E1; padding: 5px 12px; cursor: pointer; }
-  .lang button:first-child { border-radius: 8px 0 0 8px; } .lang button:last-child { border-radius: 0 8px 8px 0; }
-  .lang button[aria-pressed="true"] { background: #F8FAFC; color: #0F172A; }
-  main { padding: 24px 0 40px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 16px; }
-  .card.wide { grid-column: 1 / -1; }
-  .card h2 { margin: 0; font-size: 17px; }
-  .card .lead { margin: 4px 0 14px; color: var(--muted); font-size: 13.5px; }
-  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 12px; }
-  label { display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; font-size: 12.5px; color: var(--muted); }
-  label input, label select { width: 100%; }
-  .result { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
-  .big { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; }
-  .big.bad { color: var(--bad); } .big.good { color: var(--good); }
-  .note { color: var(--muted); font-size: 13px; margin-top: 4px; }
-  .bars { display: grid; gap: 6px; margin-top: 8px; }
-  .bar { display: grid; grid-template-columns: 90px 1fr 130px; align-items: center; gap: 8px; font-size: 13px; }
-  .bar span:last-child { white-space: nowrap; }
-  .bar span:first-child { color: var(--muted); text-align: right; }
-  .bar .track { height: 18px; background: var(--field); border-radius: 5px; overflow: hidden; }
-  .bar .fill { height: 100%; border-radius: 5px; }
-  .kpis { display: flex; flex-wrap: wrap; gap: 18px 28px; }
-  .kpi .label { color: var(--muted); font-size: 12.5px; }
-  svg text { fill: var(--muted); font-size: 11px; }
-  footer { color: var(--muted); font-size: 13px; padding-bottom: 32px; }
-  footer a, .card a { color: var(--good); }
-  @media (max-width: 520px) { .bar { grid-template-columns: 70px 1fr 120px; } h1 { font-size: 21px; } }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--paper); color: var(--ink);
+    font: 400 15.5px/1.55 "Schibsted Grotesk", "Noto Sans TC", -apple-system, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    font-feature-settings: "tnum" 1; }
+  :lang(zh-Hant) body, html:lang(zh-Hant) { letter-spacing: .01em; }
+  button, select, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 2.5px solid var(--save); outline-offset: 2px; border-radius: 6px; }
+
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 18px 0 0; }
+  .mark { font-weight: 700; font-size: 15px; color: var(--ink); text-decoration: none; display: flex; align-items: center; gap: 8px; }
+  .mark svg { width: 22px; height: 22px; }
+  .lang { display: inline-flex; background: var(--field); border-radius: 999px; padding: 3px; }
+  .lang button { border: 0; background: transparent; padding: 4px 12px; border-radius: 999px; cursor: pointer; font-size: 13px; color: var(--soft); }
+  .lang button[aria-pressed="true"] { background: var(--sheet); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+
+  .intro { padding: 34px 0 26px; max-width: 760px; }
+  h1 { margin: 0; font-size: clamp(30px, 4.6vw, 52px); line-height: 1.04; letter-spacing: -0.035em; font-weight: 800; }
+  :lang(zh-Hant) h1 { letter-spacing: -0.01em; line-height: 1.18; }
+  .intro p { margin: 14px 0 0; font-size: 17px; color: var(--soft); max-width: 62ch; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 400px) minmax(0, 1fr); gap: 36px; align-items: start; padding-bottom: 40px; }
+  @media (max-width: 940px) { .layout { grid-template-columns: 1fr; gap: 24px; } }
+
+  /* questions */
+  .ask h2 { font-size: 15px; font-weight: 700; margin: 0 0 12px; display: flex; gap: 10px; align-items: center; }
+  .ask h2 .n { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--ink); font-size: 12px; display: inline-grid; place-items: center; flex: none; }
+  .ask section + section { margin-top: 28px; }
+  .teams { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .team { border: 1.5px solid var(--rule); border-radius: 14px; padding: 12px 8px 10px; background: var(--chip); cursor: pointer; text-align: center;
+    transition: border-color .2s var(--ease), transform .2s var(--ease); }
+  .team:hover { border-color: var(--faint); }
+  .team:active { transform: scale(.98); }
+  .team svg { width: 100%; height: 40px; display: block; color: var(--soft); }
+  .team span { display: block; font-size: 12.5px; font-weight: 600; margin-top: 6px; line-height: 1.3; }
+  .team[aria-pressed="true"] { border-color: var(--ink); background: var(--sheet); }
+  .team[aria-pressed="true"] svg { color: var(--ink); }
+  .q { padding: 14px 0; border-top: 1px solid var(--rule); }
+  .q:first-child { border-top: 0; padding-top: 0; }
+  .q .label { font-weight: 600; font-size: 14.5px; line-height: 1.35; }
+  .q .help { color: var(--faint); font-size: 13px; margin-top: 2px; }
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+  .seg button { padding: 6px 13px; border-radius: 999px; border: 1px solid var(--rule); background: var(--chip); cursor: pointer; font-size: 13.5px;
+    transition: background-color .18s var(--ease), color .18s var(--ease), border-color .18s var(--ease); }
+  .seg button:hover { border-color: var(--faint); }
+  .seg button[aria-pressed="true"] { background: var(--on); color: var(--on-ink); border-color: var(--on); }
+  select { width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--rule); background: var(--chip); }
+
+  /* the sheet */
+  .sheet { background: var(--sheet); border-radius: 22px; box-shadow: var(--shadow); padding: 26px 28px 24px; }
+  @media (min-width: 941px) { .sheet { position: sticky; top: 18px; } }
+  @media (max-width: 560px) { .sheet { padding: 20px 16px; border-radius: 18px; } }
+  .bill { display: grid; gap: 10px; }
+  .row { display: grid; grid-template-columns: 112px 1fr auto; gap: 14px; align-items: center; }
+  @media (max-width: 560px) { .row { grid-template-columns: 84px 1fr auto; gap: 10px; } }
+  .row .who { color: var(--soft); font-size: 13.5px; }
+  .track { height: 14px; border-radius: 7px; background: var(--field); overflow: hidden; }
+  .fill { height: 100%; border-radius: 7px; transition: width .6s var(--ease); }
+  .fill.now { background: var(--leak); } .fill.after { background: var(--save); }
+  .amt { font-weight: 800; font-size: 26px; letter-spacing: -0.02em; text-align: right; min-width: 7ch; }
+  .amt small { font-size: 13px; font-weight: 500; color: var(--faint); letter-spacing: 0; margin-left: 2px; }
+  .amt.now { color: var(--leak); } .amt.after { color: var(--save); }
+  .verdict { margin: 14px 0 0; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .verdict .sub { display: block; font-size: 13.5px; font-weight: 400; color: var(--faint); letter-spacing: 0; margin-top: 2px; }
+
+  .diagram-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 26px; }
+  .diagram-head h3, .fixes h3 { margin: 0; font-size: 15px; font-weight: 700; }
+  .switch { display: inline-flex; background: var(--field); border-radius: 999px; padding: 3px; }
+  .switch button { white-space: nowrap; border: 0; background: transparent; padding: 4px 12px; border-radius: 999px; cursor: pointer; font-size: 13px; color: var(--soft);
+    transition: background-color .2s var(--ease), color .2s var(--ease); }
+  .switch button[aria-pressed="true"] { background: var(--sheet); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  #diagram { width: 100%; height: auto; display: block; margin-top: 6px; }
+  #diagram .node rect { transition: fill-opacity .5s var(--ease), stroke-opacity .5s var(--ease); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--faint); font-size: 12.5px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--flow); }
+  .legend .dot.ack { background: var(--leak); }
+  .legend .page { width: 10px; height: 12px; border: 1.5px solid var(--amber); border-radius: 2px; }
+
+  .fixes { margin-top: 26px; border-top: 1px solid var(--rule); padding-top: 20px; }
+  .fixes .lead { margin: 4px 0 6px; color: var(--faint); font-size: 13.5px; }
+  .fix { padding: 14px 0; border-bottom: 1px solid var(--rule); transition: opacity .25s var(--ease); }
+  .fix:last-child { border-bottom: 0; }
+  .fix.off { opacity: .55; }
+  .fix-head { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; cursor: pointer; }
+  .toggle { appearance: none; -webkit-appearance: none; width: 38px; height: 22px; border-radius: 999px; background: var(--rule); position: relative;
+    cursor: pointer; margin: 0; transition: background-color .25s var(--ease); flex: none; }
+  .toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .25s var(--ease); }
+  .toggle:checked { background: var(--save); }
+  .toggle:checked::after { transform: translateX(16px); }
+  .fix-title { font-weight: 700; font-size: 15px; line-height: 1.3; }
+  .fix-save { font-weight: 800; color: var(--save); white-space: nowrap; font-size: 15px; }
+  .fix p { margin: 5px 0 0 50px; color: var(--soft); font-size: 14px; max-width: 62ch; }
+  .fix details { margin: 8px 0 0 50px; }
+  .fix summary { cursor: pointer; font-size: 13.5px; color: var(--save); font-weight: 600; list-style: none; display: inline-flex; gap: 6px; align-items: center; }
+  .fix summary::-webkit-details-marker { display: none; }
+  .fix summary svg { width: 12px; height: 12px; transition: transform .2s var(--ease); }
+  .fix details[open] summary svg { transform: rotate(90deg); }
+  .say { margin-top: 8px; background: var(--field); border-radius: 12px; padding: 12px 14px; font-size: 14px; display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; }
+  .say button { border: 1px solid var(--rule); background: var(--sheet); border-radius: 8px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; }
+  @media (max-width: 560px) { .fix p, .fix details { margin-left: 0; } }
+  .clean { margin-top: 10px; padding: 14px 16px; border-radius: 12px; background: var(--save-wash); }
+  .fine { color: var(--faint); font-size: 12.5px; margin: 16px 0 0; }
+  .fine a, footer a { color: var(--save); }
+  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .92em; background: var(--field); padding: 1px 5px; border-radius: 5px; }
+
+  /* formulas */
+  .expert { border-top: 1px solid var(--rule); padding: 8px 0 30px; }
+  .expert > summary { cursor: pointer; font-weight: 700; padding: 14px 0; list-style: none; display: flex; align-items: center; gap: 8px; }
+  .expert > summary::-webkit-details-marker { display: none; }
+  .expert > summary svg { width: 14px; height: 14px; transition: transform .2s var(--ease); }
+  .expert[open] > summary svg { transform: rotate(90deg); }
+  .expert .lead { color: var(--faint); font-size: 13.5px; margin: -6px 0 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 28px; }
+  .formula h4 { margin: 0 0 10px; font-size: 14.5px; }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+  .fields label { display: flex; flex-direction: column; justify-content: flex-end; gap: 3px; font-size: 12px; color: var(--faint); }
+  .fields input, .fields select { width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--rule); background: var(--chip); font-size: 14px; }
+  .out { margin-top: 10px; font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+  .out small { display: block; font-size: 12.5px; font-weight: 400; color: var(--faint); letter-spacing: 0; }
+  footer { color: var(--faint); font-size: 13px; padding: 0 0 36px; }
+
+  .peek { display: none; }
+  @media (max-width: 940px) {
+    .peek { display: flex; position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 5; gap: 10px; align-items: center; justify-content: space-between;
+      background: var(--ink); color: var(--paper); border: 0; border-radius: 16px; padding: 12px 16px; box-shadow: 0 10px 30px -10px rgba(0,0,0,.45);
+      transition: transform .3s var(--ease), opacity .3s var(--ease); cursor: pointer; text-align: left; }
+    .peek.hide { transform: translateY(140%); opacity: 0; pointer-events: none; }
+    .peek b { font-size: 17px; } .peek .now { color: #FF8BA4; } .peek .after { color: #6FE0E2; }
+    .peek span { font-size: 13px; opacity: .8; }
+    footer { padding-bottom: 90px; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
 </style>
 </head>
 <body>
-<header>
-  <div class="wrap">
-    <div>
-      <h1>bot-token-optimizer</h1>
-      <p data-i18n="tagline"></p>
-      <span class="formula" data-i18n="formula"></span>
+<div class="wrap">
+  <nav>
+    <a class="mark" href="https://github.com/EndeavorYen/bot-token-optimizer">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="4" stroke="currentColor" stroke-width="2"/><circle cx="8.5" cy="12" r="1.8" fill="currentColor"/><circle cx="15.5" cy="12" r="1.8" fill="currentColor"/></svg>
+      bot-token-optimizer
+    </a>
+    <div class="lang" role="group" aria-label="Language">
+      <button id="lang-en" type="button">EN</button><button id="lang-zh" type="button">中文</button>
     </div>
-    <div class="controls">
-      <label style="color:#94A3B8"><span data-i18n="pricing"></span><select id="preset"></select></label>
-      <div class="lang" role="group" aria-label="Language">
-        <button id="lang-en" type="button">EN</button><button id="lang-zh" type="button">中文</button>
+  </nav>
+
+  <header class="intro">
+    <h1 data-i18n="title"></h1>
+    <p data-i18n="subtitle"></p>
+  </header>
+
+  <main class="layout">
+    <div class="ask">
+      <section>
+        <h2><span class="n">1</span><span data-i18n="s1"></span></h2>
+        <div class="teams" id="teams"></div>
+      </section>
+      <section>
+        <h2><span class="n">2</span><span data-i18n="s2"></span></h2>
+        <div id="questions"></div>
+      </section>
+      <section>
+        <h2><span class="n">3</span><span data-i18n="s3"></span></h2>
+        <select id="model" aria-label="Model"></select>
+      </section>
+    </div>
+
+    <div class="sheet" aria-live="polite">
+      <div class="bill">
+        <div class="row"><span class="who" data-i18n="now"></span><div class="track"><div class="fill now" id="bar-now" style="width:100%"></div></div><div class="amt now" id="now"></div></div>
+        <div class="row"><span class="who" data-i18n="after"></span><div class="track"><div class="fill after" id="bar-after" style="width:20%"></div></div><div class="amt after" id="after"></div></div>
+      </div>
+      <p class="verdict" id="verdict"></p>
+
+      <div class="diagram-head">
+        <h3 data-i18n="diagram"></h3>
+        <div class="switch" role="group">
+          <button id="view-now" type="button" data-i18n="viewNow"></button><button id="view-after" type="button" data-i18n="viewAfter"></button>
+        </div>
+      </div>
+      <svg id="diagram" viewBox="0 0 640 320" role="img"></svg>
+      <div class="legend">
+        <span><i class="dot"></i><span data-i18n="lgWork"></span></span>
+        <span><i class="dot ack"></i><span data-i18n="lgAck"></span></span>
+        <span><i class="page"></i><span data-i18n="lgBoard"></span></span>
+        <span data-i18n="lgHot"></span>
+      </div>
+
+      <div class="fixes">
+        <h3 data-i18n="fixTitle"></h3>
+        <p class="lead" data-i18n="fixLead"></p>
+        <div id="fixes"></div>
+        <p class="fine" id="fine"></p>
       </div>
     </div>
-  </div>
-</header>
+  </main>
 
-<main class="wrap">
-  <div class="grid">
-    <section class="card wide" id="growth">
-      <h2 data-i18n="g.title"></h2>
-      <p class="lead" data-i18n="g.lead"></p>
-      <div class="fields">
-        <label><span data-i18n="g.c0"></span><input type="number" id="g-c0" value="20000" min="0" step="1000"></label>
-        <label><span data-i18n="g.growth"></span><input type="number" id="g-growth" value="15000" min="0" step="1000"></label>
-        <label><span data-i18n="g.wakes"></span><input type="number" id="g-wakes" value="10" min="0" step="1"></label>
-        <label><span data-i18n="g.days"></span><input type="number" id="g-days" value="14" min="1" max="90" step="1"></label>
-        <label><span data-i18n="g.reset"></span><input type="number" id="g-reset" value="90000" min="12000" step="5000"></label>
-      </div>
-      <div class="result">
-        <div class="kpis">
-          <div class="kpi"><div class="label" data-i18n="g.never"></div><div class="big bad" id="g-out-no"></div></div>
-          <div class="kpi"><div class="label" data-i18n="g.with"></div><div class="big good" id="g-out-yes"></div></div>
-          <div class="kpi"><div class="label" data-i18n="g.ratio"></div><div class="big" id="g-out-ratio"></div></div>
+  <details class="expert">
+    <summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span data-i18n="expert"></span></summary>
+    <p class="lead" data-i18n="expertLead"></p>
+    <div class="grid">
+      <div class="formula">
+        <h4 data-i18n="b.title"></h4>
+        <div class="fields">
+          <label><span data-i18n="b.k"></span><input type="number" id="b-k" value="1" min="0" max="20" step="1"></label>
+          <label><span data-i18n="b.mode"></span><select id="b-mode"><option value="sequential" data-i18n="b.seq"></option><option value="parallel" data-i18n="b.par"></option></select></label>
         </div>
-        <svg id="g-chart" viewBox="0 0 1000 200" width="100%" role="img" aria-label="context growth chart"></svg>
-        <div class="note" id="g-note"></div>
+        <div class="out" id="b-out"></div>
       </div>
-    </section>
-
-    <section class="card" id="board">
-      <h2 data-i18n="b.title"></h2>
-      <p class="lead" data-i18n="b.lead"></p>
-      <div class="fields">
-        <label><span data-i18n="b.k"></span><input type="number" id="b-k" value="1" min="0" max="20" step="1"></label>
-        <label><span data-i18n="b.mode"></span><select id="b-mode"><option value="sequential" data-i18n="b.seq"></option><option value="parallel" data-i18n="b.par"></option></select></label>
-      </div>
-      <div class="result">
-        <div class="big bad" id="b-out"></div>
-        <div class="note" id="b-note"></div>
-      </div>
-    </section>
-
-    <section class="card" id="leader">
-      <h2 data-i18n="l.title"></h2>
-      <p class="lead" data-i18n="l.lead"></p>
-      <div class="fields">
-        <label><span data-i18n="l.cw"></span><input type="number" id="l-cw" value="30000" min="0" step="1000"></label>
-        <label><span data-i18n="l.cl"></span><input type="number" id="l-cl" value="60000" min="0" step="1000"></label>
-        <label><span data-i18n="l.cc"></span><input type="number" id="l-cc" value="100000" min="0" step="1000"></label>
-        <label><span data-i18n="l.n"></span><input type="number" id="l-n" value="6" min="1" max="50" step="1"></label>
-      </div>
-      <div class="result" id="l-out"></div>
-    </section>
-
-    <section class="card" id="span">
-      <h2 data-i18n="s.title"></h2>
-      <p class="lead" data-i18n="s.lead"></p>
-      <div class="fields">
-        <label><span data-i18n="s.n"></span><input type="number" id="s-n" value="12" min="2" max="500" step="1"></label>
-        <label><span data-i18n="s.c0"></span><input type="number" id="s-c0" value="30000" min="0" step="1000"></label>
-        <label><span data-i18n="s.m"></span><input type="number" id="s-m" value="1000" min="10" step="100"></label>
-        <label><span data-i18n="s.cap"></span><input type="number" id="s-cap" value="6" min="2" max="100" step="1"></label>
-      </div>
-      <div class="result">
-        <div class="kpis">
-          <div class="kpi"><div class="label" data-i18n="s.best"></div><div class="big good" id="s-out-best"></div></div>
-          <div class="kpi"><div class="label" data-i18n="s.closed"></div><div class="big" id="s-out-closed"></div></div>
+      <div class="formula">
+        <h4 data-i18n="l.title"></h4>
+        <div class="fields">
+          <label><span data-i18n="l.cw"></span><input type="number" id="l-cw" value="30000" min="0" step="1000"></label>
+          <label><span data-i18n="l.cl"></span><input type="number" id="l-cl" value="60000" min="0" step="1000"></label>
+          <label><span data-i18n="l.cc"></span><input type="number" id="l-cc" value="100000" min="0" step="1000"></label>
+          <label><span data-i18n="l.n"></span><input type="number" id="l-n" value="6" min="1" max="50" step="1"></label>
         </div>
-        <div class="note" id="s-note"></div>
+        <div class="out" id="l-out"></div>
       </div>
-    </section>
-
-    <section class="card" id="reset">
-      <h2 data-i18n="r.title"></h2>
-      <p class="lead" data-i18n="r.lead"></p>
-      <div class="fields">
-        <label><span data-i18n="r.c"></span><input type="number" id="r-c" value="150000" min="0" step="5000"></label>
-        <label><span data-i18n="r.base"></span><input type="number" id="r-base" value="8000" min="0" step="1000"></label>
-        <label><span data-i18n="r.handover"></span><input type="number" id="r-handover" value="3000" min="0" step="500"></label>
-        <label><span data-i18n="r.wakes"></span><input type="number" id="r-wakes" value="10" min="0" step="1"></label>
-        <label><span data-i18n="r.days"></span><input type="number" id="r-days" value="7" min="1" step="1"></label>
-        <label><span data-i18n="r.cache"></span><input type="number" id="r-cache" value="0.8" min="0" max="1" step="0.05"></label>
-      </div>
-      <div class="result">
-        <div class="kpis">
-          <div class="kpi"><div class="label" data-i18n="r.breakeven"></div><div class="big" id="r-out-be"></div></div>
-          <div class="kpi"><div class="label" data-i18n="r.net"></div><div class="big good" id="r-out-net"></div></div>
+      <div class="formula">
+        <h4 data-i18n="s.title"></h4>
+        <div class="fields">
+          <label><span data-i18n="s.n"></span><input type="number" id="s-n" value="12" min="2" max="500" step="1"></label>
+          <label><span data-i18n="s.c0"></span><input type="number" id="s-c0" value="30000" min="0" step="1000"></label>
+          <label><span data-i18n="s.m"></span><input type="number" id="s-m" value="1000" min="10" step="100"></label>
+          <label><span data-i18n="s.cap"></span><input type="number" id="s-cap" value="6" min="2" max="100" step="1"></label>
         </div>
-        <div class="note" id="r-note"></div>
+        <div class="out" id="s-out"></div>
       </div>
-    </section>
-  </div>
-</main>
+      <div class="formula">
+        <h4 data-i18n="r.title"></h4>
+        <div class="fields">
+          <label><span data-i18n="r.c"></span><input type="number" id="r-c" value="150000" min="0" step="5000"></label>
+          <label><span data-i18n="r.base"></span><input type="number" id="r-base" value="8000" min="0" step="1000"></label>
+          <label><span data-i18n="r.wakes"></span><input type="number" id="r-wakes" value="10" min="0" step="1"></label>
+          <label><span data-i18n="r.days"></span><input type="number" id="r-days" value="7" min="1" step="1"></label>
+        </div>
+        <div class="out" id="r-out"></div>
+      </div>
+    </div>
+  </details>
 
-<footer class="wrap">
-  <p id="foot"></p>
-</footer>
+  <footer><p id="foot"></p></footer>
+  <button type="button" class="peek" id="peek"><span id="peek-label"></span><span><b class="now" id="peek-now"></b> <span>›</span> <b class="after" id="peek-after"></b></span></button>
+</div>
 
 <script type="module">
 import * as calc from "./calc.js";
+import * as team from "./team.js";
 import { PRESETS } from "./presets.js";
 
 const T = {
   en: {
-    tagline: "What-if calculator for persistent bots. Every number uses the same formulas as the tested Python model.",
-    formula: "cost ≈ wake-ups × calls per wake-up × context",
-    pricing: "Pricing preset",
-    "g.title": "Context keeps growing until you hand over",
-    "g.lead": "One bot whose context grows every day. Compare never resetting with handing over to a fresh chat at a threshold (80% cache hits).",
-    "g.c0": "Starting context (tokens)", "g.growth": "Growth per day (tokens)", "g.wakes": "Wake-ups per day",
-    "g.days": "Days", "g.reset": "Hand over at (tokens)",
-    "g.never": "Never reset", "g.with": "With hand-overs", "g.ratio": "Cost ratio",
-    "g.note": (r, thr) => `${r} hand-over(s) in the period.` + (thr ? ` Above ${fmt(thr)} tokens this model bills the whole request at the long-context price.` : ""),
-    "b.title": "“Write to a board, then ping”",
-    "b.lead": "The receiver re-reads its full context to handle the ping, then again after fetching the board.",
-    "b.k": "Rounds of own work per wake-up (k)", "b.mode": "How the sender works",
-    "b.seq": "Write, then notify", "b.par": "Write + notify in one step",
-    "b.out": (x) => `${x.toFixed(2)}× tokens`,
-    "b.note": (c) => `vs. putting the content in the message. Receiver cost with a cold cache: ${c.toFixed(2)}×.`,
-    "l.title": "Relay leader vs. summarizing leader",
-    "l.lead": "A layer adds two wake-ups per task. It pays off only if it compresses reports for an expensive chief.",
-    "l.cw": "Worker context", "l.cl": "Leader context", "l.cc": "Chief context", "l.n": "Parallel subtasks",
-    "l.relay": "Single task, leader only relays", "l.agg": "Subtasks, leader sends one summary",
-    "l.flat": "Flat", "l.hier": "With leader",
-    "s.title": "How many bots per manager?",
-    "s.lead": "Each report wakes the manager and stays in its context. Shorter reports allow a wider span.",
-    "s.n": "Workers", "s.c0": "Manager base context", "s.m": "Tokens per report", "s.cap": "Platform limit",
-    "s.best": "Best span (within limit)", "s.closed": "Unconstrained k*",
-    "s.note": (b) => `${b.managers} manager(s), ${b.depth} layer(s) of waiting, ${fmt(b.cost)} tokens read by managers.`,
-    "r.title": "Time to hand over?",
-    "r.lead": "One read of the old context to write a summary, then every wake-up is cheaper.",
-    "r.c": "Current context", "r.base": "Base setup kept after reset", "r.handover": "Hand-over summary",
-    "r.wakes": "Wake-ups per day", "r.days": "Horizon (days)", "r.cache": "Cache hit rate",
-    "r.breakeven": "Pays off after", "r.net": "Net saving over the horizon",
-    "r.be": (x) => isFinite(x) ? `${x.toFixed(1)} wake-ups` : "never",
-    "r.note": (e) => `${e} wake-ups expected over the horizon. Knowledge lost in the hand-over is not priced in.`,
-    foot: (d) => `Formulas: <a href="https://github.com/EndeavorYen/bot-token-optimizer">bot-token-optimizer</a> (core/orgopt.py). Prices checked ${d}; verify with your provider. Results are estimates, not a bill.`,
+    title: "Where does your bot bill go?",
+    subtitle: "Pick the team that looks like yours and answer six questions about how your bots work. You'll see what they cost each week, which habits leak tokens, and exactly what to tell your bots.",
+    s1: "Which team looks like yours?", s2: "How do your bots work today?", s3: "Which model do they run on?",
+    teams: { pipeline: "Research, write, review", manager: "A manager and three workers", support: "Support desks and an expert" },
+    q: {
+      busy: ["How busy is the team?", "How often work passes from one bot to the next.", { quiet: "Quiet", normal: "Normal", busy: "Busy" }],
+      age: ["When did your bots last start a fresh chat?", "A bot re-reads its whole chat every time it wakes up.", { fresh: "Today", days: "A few days ago", weeks: "About two weeks ago", month: "A month or more" }],
+      acks: ["Do bots reply “OK” or “got it” to each other?", "", { never: "Never", sometimes: "Sometimes", usually: "Usually" }],
+      board: ["When a bot is pinged, does it go read a board first?", "Instead of getting the content in the message.", { no: "No", yes: "Yes" }],
+      group: ["Do bots post updates in a group chat?", "", { none: "No", short: "One-liners", long: "Long updates" }],
+      relay: ["Is there a bot that mostly passes work along?", "A coordinator that forwards messages and does little else.", { no: "No", yes: "Yes" }],
+    },
+    now: "Today", after: "With your fixes", week: "/wk",
+    verdict: (usd, pct) => `You could save about $${usd} a week, ${pct}% of the bill.`,
+    verdictSub: (m) => `That's roughly $${m} a month.`,
+    noFix: "Switch on a fix below to see what it saves.",
+    clean: "Nothing obvious to fix here: no “OK” replies, no board round-trips, no relay, and fresh chats.",
+    diagram: "Your team, and every message it sends", viewNow: "Today", viewAfter: "With fixes",
+    lgWork: "hand-off", lgAck: "“OK” reply", lgBoard: "reads a board first", lgHot: "Deeper red costs more",
+    perWeek: (usd) => `$${usd} a week`, forwards: "only forwards", groupLong: "Group chat with long updates", groupShort: "Group chat with one-liners",
+    fixTitle: "What to change", fixLead: "Biggest saving first. Each figure is what that change saves on its own; the bill above adds up the ones you switch on.",
+    alone: (usd) => `−$${usd}/wk`, say: "What to tell your bots", copy: "Copy", copied: "Copied",
+    fix: {
+      fresh: ["Hand over to a fresh chat regularly", "Your bots' history keeps growing, and every wake-up re-reads all of it. Starting fresh at about 60K tokens keeps each wake-up cheap.",
+              "When our conversation gets long, or every few days, write a short hand-over summary: the goal, decisions made, open items, and where the key files are. Then tell me so I can start a fresh chat with it."],
+      board: ["Put the content in the message, not on a board", "A ping makes the receiver re-read its whole history, and fetching the board makes it read again.",
+              "When you hand work to another bot, put the content in the message itself. If it's too long, save it to a file and say exactly which section the other bot needs."],
+      acks: ["Stop the “OK” and “got it” replies", "A two-word reply still wakes the other bot, which re-reads its whole history just to see it.",
+             "Don't send acknowledgements like “OK”, “got it” or “thanks” to other bots. Only message another bot when it needs to do something, and combine updates into one message."],
+      relay: ["Let bots hand off directly", "A bot that only forwards messages adds two wake-ups to every task.",
+              "Send work directly to the bot that will do it, and report results directly to whoever asked. Don't route messages through a coordinator."],
+      group: ["Keep the group chat to one-liners", "Every group message lands in every member's history, so a long update is paid for many times.",
+              "In the group chat, post one-line updates only: what's done and what's next. Send details one-to-one or as a link to a file."],
+    },
+    fine: (d) => `An estimate for a typical team of this shape, using the same model as the command-line tool. It assumes each wake-up re-reads the whole chat and hand-overs happen at 60K tokens; prices were checked on ${d}. For figures from your real usage, run <code>bto analyze</code> on your usage CSV (instructions on the <a href="https://github.com/EndeavorYen/bot-token-optimizer">project page</a>).`,
+    peek: "See your result", expert: "The formulas behind it", expertLead: "For when you want to check one effect on its own.",
+    "b.title": "Write to a board, then ping", "b.k": "Own work rounds per wake-up", "b.mode": "Sender", "b.seq": "Writes, then pings", "b.par": "Both in one step",
+    "b.out": (x, c) => `${x.toFixed(2)}× the tokens<small>Receiver cost with a cold cache: ${c.toFixed(2)}×</small>`,
+    "l.title": "Relay vs. summarizing leader", "l.cw": "Worker context", "l.cl": "Leader context", "l.cc": "Chief context", "l.n": "Parallel subtasks",
+    "l.out": (a, b) => `${a.toFixed(2)}× vs ${b.toFixed(2)}×<small>Relaying leader vs. summarizing leader, compared with no leader</small>`,
+    "s.title": "Bots per manager", "s.n": "Workers", "s.c0": "Manager context", "s.m": "Tokens per report", "s.cap": "Platform limit",
+    "s.out": (k, c, b) => `${k} bots<small>Best within the limit (${c.toFixed(1)} without it), ${b.depth} layer${b.depth > 1 ? "s" : ""}</small>`,
+    "r.title": "Time to hand over?", "r.c": "Current context", "r.base": "Setup kept", "r.wakes": "Wake-ups a day", "r.days": "Days ahead",
+    "r.out": (be, usd) => `${isFinite(be) ? `pays off after ${be.toFixed(1)} wake-ups` : "never pays off"}<small>Net saving over the period: $${usd.toFixed(2)}</small>`,
+    foot: `Open source on <a href="https://github.com/EndeavorYen/bot-token-optimizer">GitHub</a>. Every formula on this page is checked against the tested Python model.`,
   },
   "zh-TW": {
-    tagline: "常駐 bot 的「如果…會怎樣」計算器。所有數字都和經過測試的 Python 模型用同一套公式。",
-    formula: "成本 ≈ 喚醒次數 × 每次喚醒的輪數 × 上下文",
-    pricing: "價格設定",
-    "g.title": "上下文會一直長大，直到你交接",
-    "g.lead": "一個上下文每天成長的 bot。比較從不重建，和到門檻就交接給新 chat 的差別（快取命中 80%）。",
-    "g.c0": "起始上下文（token）", "g.growth": "每天成長（token）", "g.wakes": "每天喚醒次數",
-    "g.days": "天數", "g.reset": "到多大就交接（token）",
-    "g.never": "從不重建", "g.with": "定期交接", "g.ratio": "成本比",
-    "g.note": (r, thr) => `期間內交接 ${r} 次。` + (thr ? `上下文超過 ${fmt(thr)} token 時，這個模型的整個請求改用長上下文價格。` : ""),
-    "b.title": "「寫到 board，再通知對方」",
-    "b.lead": "接收方處理通知要重讀一次完整上下文，讀完 board 後又再讀一次。",
-    "b.k": "每次喚醒為自己工作做幾輪（k）", "b.mode": "發送方的做法",
-    "b.seq": "先寫 board 再通知", "b.par": "寫 board 與通知同一步",
-    "b.out": (x) => `${x.toFixed(2)} 倍 token`,
-    "b.note": (c) => `相對直接把內容放進訊息。喚醒時快取失效的接收方成本：${c.toFixed(2)} 倍。`,
-    "l.title": "轉話 leader vs 彙整 leader",
-    "l.lead": "每多一層，每個任務多兩次喚醒。只有替昂貴的總管壓縮報告時才划算。",
-    "l.cw": "worker 上下文", "l.cl": "leader 上下文", "l.cc": "總管上下文", "l.n": "平行子任務數",
-    "l.relay": "單一任務，leader 只轉話", "l.agg": "多個子任務，leader 交一份摘要",
-    "l.flat": "扁平", "l.hier": "有 leader",
-    "s.title": "一個主管該帶幾個 bot？",
-    "s.lead": "每則回報都會叫醒主管，也會留在它的上下文裡。回報越短，能帶越多。",
-    "s.n": "worker 數", "s.c0": "主管基礎上下文", "s.m": "每則回報 token", "s.cap": "平台上限",
-    "s.best": "最佳控制幅度（在上限內）", "s.closed": "不設上限的 k*",
-    "s.note": (b) => `${b.managers} 個主管、${b.depth} 層等待，主管共讀取 ${fmt(b.cost)} token。`,
-    "r.title": "該交接了嗎？",
-    "r.lead": "舊上下文讀一次來寫摘要，之後每次喚醒都變便宜。",
-    "r.c": "目前上下文", "r.base": "重建後保留的基礎設定", "r.handover": "交接摘要長度",
-    "r.wakes": "每天喚醒次數", "r.days": "期間（天）", "r.cache": "快取命中率",
-    "r.breakeven": "幾次喚醒後回本", "r.net": "期間內淨省",
-    "r.be": (x) => isFinite(x) ? `${x.toFixed(1)} 次` : "不會回本",
-    "r.note": (e) => `期間內預計喚醒 ${e} 次。交接時遺失的知識沒有算進去。`,
-    foot: (d) => `公式來源：<a href="https://github.com/EndeavorYen/bot-token-optimizer">bot-token-optimizer</a>（core/orgopt.py）。價格查詢日期 ${d}，請以供應商公告為準。結果為估算，不是帳單。`,
+    title: "你的 bot 帳單，錢都花去哪了？",
+    subtitle: "選一個像你的團隊，回答六個關於 bot 工作方式的問題。你會看到每週成本、哪些習慣在漏 token，以及該怎麼跟你的 bot 說。",
+    s1: "哪一種團隊像你的？", s2: "你的 bot 現在怎麼工作？", s3: "它們用哪個模型？",
+    teams: { pipeline: "研究、撰寫、審稿", manager: "一個主管帶三個 worker", support: "客服櫃台與一位專家" },
+    q: {
+      busy: ["團隊有多忙？", "工作在 bot 之間交接的頻率。", { quiet: "清閒", normal: "一般", busy: "很忙" }],
+      age: ["bot 上次開新的 chat 是什麼時候？", "bot 每次被喚醒，都要重讀整段 chat。", { fresh: "今天", days: "幾天前", weeks: "大約兩週前", month: "一個月以上" }],
+      acks: ["bot 之間會互回「OK」「收到」嗎？", "", { never: "從不", sometimes: "有時候", usually: "常常" }],
+      board: ["bot 被通知後，會先去讀 board 嗎？", "而不是直接在訊息裡拿到內容。", { no: "不會", yes: "會" }],
+      group: ["bot 會在群組裡貼進度嗎？", "", { none: "不會", short: "只貼一行", long: "會貼長篇" }],
+      relay: ["有沒有一個 bot 主要在轉交工作？", "只負責轉傳訊息、自己不太做事的協調者。", { no: "沒有", yes: "有" }],
+    },
+    now: "現在", after: "照建議改後", week: "／週",
+    verdict: (usd, pct) => `每週大約可以省 $${usd}，是帳單的 ${pct}%。`,
+    verdictSub: (m) => `換算每月約 $${m}。`,
+    noFix: "打開下方任一項改善，就能看到可以省多少。",
+    clean: "沒有明顯要改的地方：沒有「OK」回覆、沒有來回讀 board、沒有轉話，chat 也都很新。",
+    diagram: "你的團隊，與它傳出的每一則訊息", viewNow: "現在", viewAfter: "改善後",
+    lgWork: "交接", lgAck: "「OK」回覆", lgBoard: "會先讀 board", lgHot: "紅色越深越花錢",
+    perWeek: (usd) => `每週 $${usd}`, forwards: "只負責轉話", groupLong: "會貼長篇更新的群組", groupShort: "只貼一行的群組",
+    fixTitle: "該改什麼", fixLead: "依省最多排序。每個數字是單獨做這一項能省多少；上方帳單是你打開的項目合起來的效果。",
+    alone: (usd) => `−$${usd}／週`, say: "怎麼跟你的 bot 說", copy: "複製", copied: "已複製",
+    fix: {
+      fresh: ["定期交接給新的 chat", "bot 的歷史會一直變長，每次喚醒都要全部重讀。上下文大約到 60K token 就換新的 chat，每次喚醒都能保持便宜。",
+              "當我們的對話變長，或每隔幾天，請寫一份簡短的交接摘要：目標、已做的決定、未完成事項、重要檔案的位置。寫好後告訴我，我會用它開一個新的 chat。"],
+      board: ["內容直接放訊息裡，不要放 board", "一則通知就讓接收方重讀整段歷史，去讀 board 又要再讀一次。",
+              "把工作交給其他 bot 時，請把內容直接寫在訊息裡。內容太長的話，存成檔案，並說清楚對方需要讀哪一段。"],
+      acks: ["停止「OK」「收到」的回覆", "就算只回兩個字也會叫醒對方，讓它重讀整段歷史只為了看這一句。",
+             "不要回覆其他 bot「OK」「收到」「謝謝」這類確認訊息。只有在對方需要做事時才傳訊息，並把多個更新合併成一則。"],
+      relay: ["讓 bot 直接交接", "只負責轉話的 bot，會讓每個任務多出兩次喚醒。",
+              "請把工作直接交給會處理的 bot，結果也直接回報給提出需求的人。不要再透過協調者轉傳訊息。"],
+      group: ["群組只貼一行狀態", "群組裡的每則訊息都會進到每個成員的歷史，一篇長更新等於被付了好幾次錢。",
+              "在群組裡只貼一行狀態：完成了什麼、接下來做什麼。細節改用一對一訊息，或附上檔案連結。"],
+    },
+    fine: (d) => `這是用和指令列工具相同的模型，對這種典型團隊做的估算。假設每次喚醒都重讀整段 chat，並在 60K token 時交接；價格查詢日期 ${d}。想用你的實際用量計算，請對 usage CSV 執行 <code>bto analyze</code>（說明在<a href="https://github.com/EndeavorYen/bot-token-optimizer">專案頁面</a>）。`,
+    peek: "看結果", expert: "背後的公式", expertLead: "想單獨檢查某一個效果時使用。",
+    "b.title": "寫到 board 再通知", "b.k": "每次喚醒自己工作幾輪", "b.mode": "發送方", "b.seq": "先寫再通知", "b.par": "同一步完成",
+    "b.out": (x, c) => `${x.toFixed(2)} 倍 token<small>喚醒時快取失效的接收方成本：${c.toFixed(2)} 倍</small>`,
+    "l.title": "轉話 leader vs 彙整 leader", "l.cw": "worker 上下文", "l.cl": "leader 上下文", "l.cc": "總管上下文", "l.n": "平行子任務",
+    "l.out": (a, b) => `${a.toFixed(2)} 倍 vs ${b.toFixed(2)} 倍<small>轉話 leader 與彙整 leader，相對沒有 leader</small>`,
+    "s.title": "一個主管帶幾個", "s.n": "worker 數", "s.c0": "主管上下文", "s.m": "每則回報 token", "s.cap": "平台上限",
+    "s.out": (k, c, b) => `${k} 個<small>上限內的最佳值（不設上限為 ${c.toFixed(1)}），共 ${b.depth} 層</small>`,
+    "r.title": "該交接了嗎？", "r.c": "目前上下文", "r.base": "保留的基礎設定", "r.wakes": "每天喚醒次數", "r.days": "往後天數",
+    "r.out": (be, usd) => `${isFinite(be) ? `${be.toFixed(1)} 次喚醒後回本` : "不會回本"}<small>期間內淨省 $${usd.toFixed(2)}</small>`,
+    foot: `開源於 <a href="https://github.com/EndeavorYen/bot-token-optimizer">GitHub</a>。這一頁的每個公式都和經過測試的 Python 模型交叉驗證。`,
   },
 };
 
+const MODEL_LABELS = {
+  "grok-4.7": "xAI Grok 4.7", "gpt-6.1-sol": "OpenAI GPT-6.1 Sol", "gpt-6-luna": "OpenAI GPT-6 Luna",
+  "claude-opus-5-5": "Anthropic Claude Opus 5.5", "claude-sonnet-5-5": "Anthropic Claude Sonnet 5.5",
+  "claude-haiku-5-5": "Anthropic Claude Haiku 5.5", "gemini-4-argon": "Google Gemini 4 Argon", "gemini-3.8-flash": "Google Gemini 3.8 Flash",
+};
+const TEAM_ICONS = {
+  pipeline: '<svg viewBox="0 0 120 40"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="14" cy="20" r="7"/><circle cx="46" cy="20" r="7"/><circle cx="78" cy="20" r="7"/><circle cx="108" cy="20" r="7"/><path d="M22 20h16M54 20h16M86 20h14"/></g></svg>',
+  manager: '<svg viewBox="0 0 120 40"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="60" cy="8" r="6"/><circle cx="26" cy="32" r="6"/><circle cx="60" cy="32" r="6"/><circle cx="94" cy="32" r="6"/><path d="M55 12L31 28M60 14v12M65 12l24 16"/></g></svg>',
+  support: '<svg viewBox="0 0 120 40"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="34" cy="10" r="6"/><circle cx="34" cy="30" r="6"/><circle cx="92" cy="20" r="8"/><path d="M40 12l44 6M40 28l44-6"/><path d="M8 7l18 2M8 33l18-2" stroke-dasharray="3 3"/></g></svg>',
+};
+const CHEVRON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
+
 const $ = (id) => document.getElementById(id);
-const num = (id) => Math.max(0, parseFloat($(id).value) || 0);
-const fmt = (x) => Math.round(x).toLocaleString("en-US");
-const usd = (x) => `$${x.toFixed(2)}`;
-function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
-function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } }
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+                set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } } };
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let lang = store.get("bto-lang") || ((navigator.language || "").toLowerCase().startsWith("zh") ? "zh-TW" : "en");
+const answers = { ...team.DEFAULTS };
+let chosen = null;          // fixes switched on; null means "all that apply"
+let view = "now";
+const money = (x) => (x >= 10 ? Math.round(x).toLocaleString("en-US") : x.toFixed(2));
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const L = () => T[lang];
 
-const sel = $("preset");
-for (const [key, p] of Object.entries(PRESETS)) {
-  const o = document.createElement("option");
-  o.value = key; o.textContent = p.label; sel.appendChild(o);
+// ------------------------------------------------------------ number tween (answers a person's change)
+const shown = new Map();
+function tween(el, to, fmt) {
+  const from = shown.get(el) ?? to;
+  shown.set(el, to);
+  if (reduceMotion || from === to) { el.innerHTML = fmt(to); return; }
+  const t0 = performance.now(), dur = 500;
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+    el.innerHTML = fmt(from + (to - from) * e);
+    if (k < 1 && shown.get(el) === to) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
-sel.value = "grok-4.7";
-let lang = localStorageGet("bto-lang") || ((navigator.language || "").toLowerCase().startsWith("zh") ? "zh-TW" : "en");
 
-function tr(key, ...args) {
-  const v = T[lang][key];
-  return typeof v === "function" ? v(...args) : v;
+// ------------------------------------------------------------ controls
+function buildControls() {
+  const t = L();
+  $("teams").innerHTML = Object.keys(TEAM_ICONS).map((k) =>
+    `<button type="button" class="team" data-team="${k}" aria-pressed="false">${TEAM_ICONS[k]}<span>${esc(t.teams[k])}</span></button>`).join("");
+  $("questions").innerHTML = Object.entries(t.q).map(([key, [label, help, opts]]) =>
+    `<div class="q"><div class="label" id="q-${key}">${esc(label)}</div>${help ? `<div class="help">${esc(help)}</div>` : ""}
+     <div class="seg" role="group" aria-labelledby="q-${key}">${Object.entries(opts).map(([v, txt]) =>
+       `<button type="button" data-q="${key}" data-v="${v}" aria-pressed="false">${esc(txt)}</button>`).join("")}</div></div>`).join("");
+  $("model").innerHTML = Object.keys(PRESETS).map((k) => `<option value="${k}">${esc(MODEL_LABELS[k] || PRESETS[k].label)}</option>`).join("");
+  $("model").value = answers.model;
 }
 
-function chart(svg, series, thr, days) {
-  const W = 1000, H = 200, pad = 30;
-  const maxY = Math.max(...series.flatMap((s) => s.pts.map((p) => p[1])), thr && thr < 1e9 ? thr * 1.05 : 0, 1);
-  const maxX = Math.max(...series.flatMap((s) => s.pts.map((p) => p[0])), 1);
-  const X = (x) => pad + (x / maxX) * (W - pad - 10), Y = (y) => H - pad - (y / maxY) * (H - pad - 10);
-  let out = `<line x1="${pad}" y1="${H - pad}" x2="${W - 10}" y2="${H - pad}" stroke="var(--line)"/>`;
-  if (thr && thr <= maxY) out += `<line x1="${pad}" y1="${Y(thr)}" x2="${W - 10}" y2="${Y(thr)}" stroke="var(--warn)" stroke-dasharray="6 5" stroke-width="2"/><text x="${pad + 6}" y="${Y(thr) - 6}">${fmt(thr)}</text>`;
-  for (const s of series) {
-    out += `<polyline fill="none" stroke="${s.color}" stroke-width="3" stroke-linejoin="round" points="${s.pts.map((p) => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ")}"/>`;
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-team], [data-q], #view-now, #view-after, .say button, #lang-en, #lang-zh");
+  if (!el) return;
+  if (el.dataset.team) { answers.team = el.dataset.team; chosen = null; }
+  else if (el.dataset.q) { answers[el.dataset.q] = el.dataset.v; chosen = null; }
+  else if (el.id === "view-now" || el.id === "view-after") view = el.id === "view-now" ? "now" : "after";
+  else if (el.id === "lang-en" || el.id === "lang-zh") { lang = el.id === "lang-en" ? "en" : "zh-TW"; store.set("bto-lang", lang); buildControls(); }
+  else {
+    const text = el.closest(".say").querySelector("span").textContent;
+    navigator.clipboard?.writeText(text).then(() => { el.textContent = L().copied; setTimeout(() => (el.textContent = L().copy), 1400); });
+    return;
   }
-  out += `<text x="${pad}" y="${H - 8}">0</text><text x="${W - 10}" y="${H - 8}" text-anchor="end">${days}d</text>`;
-  svg.innerHTML = out;
-}
-
-function series(c0, growth, days, resetAt) {
-  const pts = []; let c = c0;
-  for (let t = 0; t <= days + 1e-9; t += 0.05) {
-    pts.push([t, c]); c += growth * 0.05;
-    if (resetAt && c >= resetAt) { pts.push([t + 0.05, c]); c = 11000; }
+  render();
+});
+document.addEventListener("change", (e) => {
+  if (e.target.id === "model") { answers.model = e.target.value; render(); }
+  if (e.target.matches("[data-fix]")) {
+    chosen = new Set([...document.querySelectorAll("[data-fix]")].filter((x) => x.checked).map((x) => x.dataset.fix));
+    render();
   }
-  return pts;
+});
+
+// ------------------------------------------------------------ the living team diagram
+function diagram(res, org) {
+  const t = L();
+  const W = 640, H = 320, cx = 320, cy = 168, rx = 222, ry = 104, bw = 138, bh = 52;
+  const names = org.bots.map((b) => b.name);
+  const fixed = {
+    manager: { chief: [320, 50], coordinator: [320, 164], "worker-1": [120, 276], "worker-2": [320, 276], "worker-3": [520, 276] },
+    support: { "desk-1": [110, 70], "desk-2": [110, 266], coordinator: [330, 168], expert: [540, 168] },
+  }[answers.team];
+  const pos = {};
+  names.forEach((n, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / names.length;
+    pos[n] = fixed?.[n] || [cx + rx * Math.cos(a), cy + ry * Math.sin(a)];
+  });
+  const cost = Object.fromEntries(res.bots.map((r) => [r.bot, r.cost_usd]));
+  const maxCost = Math.max(...Object.values(cost), 1e-9);
+
+  // one lane per (direction, kind) so hand-offs and "OK" replies never overlap
+  const lanes = new Map();
+  for (const l of org.links) {
+    const ack = l.avg_tokens <= 30;
+    const key = `${l.from}>${l.to}>${ack}`;
+    const cur = lanes.get(key);
+    lanes.set(key, { from: l.from, to: l.to, ack, n: (cur?.n || 0) + l.messages_per_day });
+  }
+  let paths = "", dots = "", i = 0;
+  for (const ln of lanes.values()) {
+    const [x1, y1] = pos[ln.from], [x2, y2] = pos[ln.to];
+    const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+    const side = ln.from < ln.to ? 1 : -1;
+    const off = side * (ln.ack ? 13 : 5);
+    const nx = -uy * off, ny = ux * off;
+    const s = Math.min(Math.abs((bw / 2 + 8) / (ux || 1e-9)), Math.abs((bh / 2 + 8) / (uy || 1e-9)));
+    const ax = x1 + ux * s + nx, ay = y1 + uy * s + ny, bx = x2 - ux * s + nx, by = y2 - uy * s + ny;
+    const d = `M${ax.toFixed(1)} ${ay.toFixed(1)} L${bx.toFixed(1)} ${by.toFixed(1)}`;
+    const color = ln.ack ? "var(--leak)" : "var(--flow)";
+    paths += `<path id="lane${i}" d="${d}" stroke="${color}" stroke-width="${ln.ack ? 1.4 : 1.8}" stroke-opacity="${ln.ack ? .55 : .7}" fill="none"
+      ${ln.ack ? 'stroke-dasharray="3 4"' : ""} marker-end="url(#${ln.ack ? "tip-ack" : "tip"})"/>`;
+    if (!reduceMotion) {
+      const count = Math.max(1, Math.min(4, Math.round(ln.n / 3)));
+      const dur = Math.max(1.4, Math.min(4.5, 9 / Math.sqrt(ln.n + 1)));
+      for (let k = 0; k < count; k++) {
+        dots += `<circle r="${ln.ack ? 2.6 : 3.4}" fill="${color}"><animateMotion dur="${dur.toFixed(2)}s" repeatCount="indefinite"
+          begin="${(-dur * k / count).toFixed(2)}s" keyPoints="0;1" keyTimes="0;1" calcMode="linear"><mpath href="#lane${i}"/></animateMotion></circle>`;
+      }
+    }
+    i++;
+  }
+  let nodes = "";
+  for (const b of org.bots) {
+    const [x, y] = pos[b.name];
+    const share = cost[b.name] / maxCost;
+    const relay = b.name === "coordinator";
+    nodes += `<g class="node">
+      <rect x="${x - bw / 2}" y="${y - bh / 2}" width="${bw}" height="${bh}" rx="14" fill="var(--leak)" fill-opacity="${(0.05 + 0.34 * share * share).toFixed(2)}"
+        stroke="${relay ? "var(--amber)" : "var(--leak)"}" stroke-opacity="${relay ? 1 : (0.25 + 0.75 * share).toFixed(2)}" stroke-width="${relay ? 2 : 1.4}" ${relay ? 'stroke-dasharray="5 4"' : ""}/>
+      <text x="${x}" y="${y - 5}" text-anchor="middle" font-size="14.5" font-weight="700" fill="var(--ink)">${esc(b.name)}</text>
+      <text x="${x}" y="${y + 14}" text-anchor="middle" font-size="12" fill="var(--soft)">${esc(t.perWeek(money(cost[b.name])))}</text>
+      ${relay ? `<text ${{
+        support: `x="${x}" y="${y + bh / 2 + 18}" text-anchor="middle"`,
+        manager: `x="${x + bw / 2 + 10}" y="${y + 4}"`,
+      }[answers.team] || `x="${x - bw / 2 + 2}" y="${y - bh / 2 - 8}"`} font-size="12" font-weight="600" fill="var(--amber)">${esc(t.forwards)}</text>` : ""}
+      ${b.reads_board_via_tool ? `<g transform="translate(${x + bw / 2 - 16} ${y - bh / 2 - 7})"><title>${esc(t.lgBoard)}</title>
+        <rect width="13" height="16" rx="2.5" fill="var(--sheet)" stroke="var(--amber)" stroke-width="1.6"/><path d="M3.5 5h6M3.5 8h6M3.5 11h4" stroke="var(--amber)" stroke-width="1.3"/></g>` : ""}
+    </g>`;
+  }
+  const g = org.groups[0];
+  const group = g ? `<rect x="10" y="12" width="${W - 20}" height="${H - 20}" rx="26" fill="var(--field)" fill-opacity=".55"/>
+    <text x="30" y="38" font-size="12.5" fill="var(--faint)">${esc(g.avg_tokens > 200 ? t.groupLong : t.groupShort)}</text>` : "";
+  $("diagram").setAttribute("aria-label", t.diagram);
+  $("diagram").innerHTML = `<defs>
+      <marker id="tip" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1 1L9 5L1 9" fill="none" stroke="var(--flow)" stroke-width="1.8"/></marker>
+      <marker id="tip-ack" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L9 5L1 9" fill="none" stroke="var(--leak)" stroke-width="1.8"/></marker>
+    </defs>${group}${paths}${dots}${nodes}`;
 }
 
-function bar(label, value, max, color, text) {
-  return `<div class="bar"><span>${label}</span><div class="track"><div class="fill" style="width:${(100 * value / max).toFixed(1)}%;background:${color}"></div></div><span>${text}</span></div>`;
-}
-
+// ------------------------------------------------------------ render
 function render() {
+  const t = L();
   document.documentElement.lang = lang === "zh-TW" ? "zh-Hant" : "en";
-  document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = tr(el.dataset.i18n); });
+  document.title = lang === "zh-TW" ? "Bot Token 健檢" : "Bot Token Checkup";
+  document.querySelectorAll("[data-i18n]").forEach((el) => { const v = t[el.dataset.i18n]; if (typeof v === "string") el.textContent = v; });
   $("lang-en").setAttribute("aria-pressed", lang === "en");
   $("lang-zh").setAttribute("aria-pressed", lang === "zh-TW");
-  const p = PRESETS[sel.value];
-  const thr = p.long_context_threshold;
+  document.querySelectorAll("[data-team]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.team === answers.team));
+  document.querySelectorAll("[data-q]").forEach((b) => b.setAttribute("aria-pressed", answers[b.dataset.q] === b.dataset.v));
 
-  // growth
-  const g = { c0: num("g-c0"), growth: num("g-growth"), wakesPerDay: num("g-wakes"), days: Math.min(num("g-days"), 90) || 1 };
-  const no = calc.growthCost(p, g), yes = calc.growthCost(p, { ...g, resetAt: Math.max(num("g-reset"), 12000) });
-  $("g-out-no").textContent = usd(no.cost);
-  $("g-out-yes").textContent = usd(yes.cost);
-  $("g-out-ratio").textContent = no.cost ? `${(yes.cost / no.cost).toFixed(2)}×` : "–";
-  $("g-note").textContent = tr("g.note", yes.resets, thr);
-  chart($("g-chart"), [{ pts: series(g.c0, g.growth, g.days, null), color: "var(--bad)" },
-                       { pts: series(g.c0, g.growth, g.days, Math.max(num("g-reset"), 12000)), color: "var(--good)" }], thr, g.days);
+  const pricing = PRESETS[answers.model];
+  const applicable = team.applicableFixes(answers);
+  const picked = chosen ? new Set([...chosen].filter((f) => applicable.includes(f))) : new Set(applicable);
+  const r = team.analyze(answers, picked, pricing);
 
-  // board
-  const b = calc.boardOverhead(Math.round(num("b-k")), $("b-mode").value, calc.priceRatios(p).cache);
-  $("b-out").textContent = tr("b.out", b.token_ratio);
-  $("b-note").textContent = tr("b.note", b.receiver_cost_ratio_cold_cache);
+  const fmtAmt = (x) => `$${money(x)}<small>${t.week}</small>`;
+  tween($("now"), r.now.totalUsd, fmtAmt);
+  tween($("after"), r.after.totalUsd, fmtAmt);
+  $("bar-after").style.width = `${Math.max(1.5, (100 * r.after.totalUsd) / Math.max(r.now.totalUsd, 1e-9))}%`;
+  const saved = r.now.totalUsd - r.after.totalUsd;
+  $("verdict").innerHTML = saved > 0.005
+    ? `${esc(t.verdict(money(saved), Math.round((100 * saved) / r.now.totalUsd)))}<span class="sub">${esc(t.verdictSub(money(saved * 30 / 7)))}</span>`
+    : esc(applicable.length ? t.noFix : t.clean);
 
-  // leader
-  const cw = num("l-cw"), cl = num("l-cl"), cc = num("l-cc"), n = Math.max(1, Math.round(num("l-n")));
-  const rel = calc.scenarioRelay(cw, cl, cc), agg = calc.scenarioAggregate(n, cw, cl, cc);
-  const max = Math.max(rel.flat, rel.hierarchy, agg.flat, agg.hierarchy, 1);
-  const col = (r) => (r.hierarchy > r.flat ? "var(--bad)" : "var(--good)");
-  $("l-out").innerHTML =
-    `<strong>${tr("l.relay")}</strong><div class="bars">${bar(tr("l.flat"), rel.flat, max, "var(--neutral)", fmt(rel.flat))}${bar(tr("l.hier"), rel.hierarchy, max, col(rel), `${fmt(rel.hierarchy)} · ${rel.ratio.toFixed(2)}×`)}</div>` +
-    `<div style="height:10px"></div><strong>${tr("l.agg")}</strong><div class="bars">${bar(tr("l.flat"), agg.flat, max, "var(--neutral)", fmt(agg.flat))}${bar(tr("l.hier"), agg.hierarchy, max, col(agg), `${fmt(agg.hierarchy)} · ${agg.ratio.toFixed(2)}×`)}</div>`;
+  $("view-now").setAttribute("aria-pressed", view === "now");
+  $("view-after").setAttribute("aria-pressed", view === "after");
+  const s = view === "now" ? r.now : r.after;
+  diagram(s.res, s.org);
 
-  // span
-  const sn = Math.max(2, Math.round(num("s-n"))), cap = Math.max(2, Math.round(num("s-cap")));
-  const sp = calc.optimalSpan(sn, num("s-c0"), Math.max(num("s-m"), 1), null, cap, true);
-  $("s-out-best").textContent = sp.best.k;
-  $("s-out-closed").textContent = sp.closed_form_k.toFixed(1);
-  $("s-note").textContent = tr("s.note", sp.best);
-
-  // reset
-  const r = calc.resetDecision(num("r-c"), num("r-base"), p, { handover: num("r-handover"), wakesPerDay: num("r-wakes"),
-    horizonDays: num("r-days"), cacheHit: Math.min(num("r-cache"), 1) });
-  $("r-out-be").textContent = tr("r.be", r.breakeven_wakes);
-  $("r-out-net").textContent = usd(r.net_saving_usd);
-  $("r-out-net").className = `big ${r.net_saving_usd >= 0 ? "good" : "bad"}`;
-  $("r-note").textContent = tr("r.note", r.expected_wakes);
-
-  $("foot").innerHTML = tr("foot", p.checked || "");
+  const order = [...applicable].sort((a, b) => r.alone[b] - r.alone[a]);
+  $("fixes").innerHTML = order.length ? order.map((f) => {
+    const [title, why, say] = t.fix[f];
+    const on = picked.has(f);
+    return `<div class="fix ${on ? "" : "off"}">
+      <label class="fix-head"><input class="toggle" type="checkbox" data-fix="${f}" ${on ? "checked" : ""}>
+        <span class="fix-title">${esc(title)}</span><span class="fix-save">${t.alone(money(r.alone[f]))}</span></label>
+      <p>${esc(why)}</p>
+      <details><summary>${CHEVRON}${esc(t.say)}</summary><div class="say"><span>${esc(say)}</span><button type="button">${esc(t.copy)}</button></div></details>
+    </div>`;
+  }).join("") : `<div class="clean">${esc(t.clean)}</div>`;
+  $("peek-label").textContent = t.peek;
+  $("peek-now").textContent = `$${money(r.now.totalUsd)}`;
+  $("peek-after").textContent = `$${money(r.after.totalUsd)}${t.week}`;
+  $("fine").innerHTML = t.fine(pricing.checked || "");
+  $("foot").innerHTML = t.foot;
+  renderExpert(pricing);
 }
 
-document.querySelectorAll("input, select").forEach((el) => el.addEventListener("input", render));
-$("lang-en").addEventListener("click", () => { lang = "en"; localStorageSet("bto-lang", lang); render(); });
-$("lang-zh").addEventListener("click", () => { lang = "zh-TW"; localStorageSet("bto-lang", lang); render(); });
+// ------------------------------------------------------------ formulas
+const num = (id) => Math.max(0, parseFloat($(id).value) || 0);
+function renderExpert(p) {
+  const t = L();
+  const b = calc.boardOverhead(Math.round(num("b-k")), $("b-mode").value, calc.priceRatios(p).cache);
+  $("b-out").innerHTML = t["b.out"](b.token_ratio, b.receiver_cost_ratio_cold_cache);
+  const n = Math.max(1, Math.round(num("l-n")));
+  $("l-out").innerHTML = t["l.out"](calc.scenarioRelay(num("l-cw"), num("l-cl"), num("l-cc")).ratio,
+                                     calc.scenarioAggregate(n, num("l-cw"), num("l-cl"), num("l-cc")).ratio);
+  const sp = calc.optimalSpan(Math.max(2, Math.round(num("s-n"))), num("s-c0"), Math.max(num("s-m"), 1), null, Math.max(2, Math.round(num("s-cap"))), true);
+  $("s-out").innerHTML = t["s.out"](sp.best.k, sp.closed_form_k, sp.best);
+  const rd = calc.resetDecision(num("r-c"), num("r-base"), p, { wakesPerDay: num("r-wakes"), horizonDays: num("r-days") });
+  $("r-out").innerHTML = t["r.out"](rd.breakeven_wakes, rd.net_saving_usd);
+}
+document.querySelectorAll(".expert input, .expert select").forEach((el) => el.addEventListener("input", () => renderExpert(PRESETS[answers.model])));
+
+$("peek").addEventListener("click", () => document.querySelector(".sheet").scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" }));
+new IntersectionObserver(([e]) => $("peek").classList.toggle("hide", e.isIntersecting), { threshold: 0.15 }).observe(document.querySelector(".sheet"));
+
+buildControls();
 render();
 </script>
 </body>

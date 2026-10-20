@@ -110,3 +110,69 @@ export function growthCost(pricing, { c0, growth, wakesPerDay, days, resetAt = n
   }
   return { cost, resets };
 }
+
+export function longMultipliers(p) {
+  const pm = p.per_million;
+  const lp = p.long_context_per_million || pm;
+  return { input: lp.input / pm.input, output: lp.output / pm.output };
+}
+
+// Port of orgopt.evaluate_org (cost part): input + output cost per bot over the horizon.
+export function evaluateOrg(org, pricing) {
+  const { cache: rCache, out: rOut } = priceRatios(pricing);
+  const lm = longMultipliers(pricing);
+  const thr = pricing.long_context_threshold || Infinity;
+  const H = org.horizon_days ?? 7;
+  const bots = new Map();
+  for (const b of org.bots) {
+    const c = b.context_tokens;
+    const reads = Boolean(b.reads_board_via_tool);
+    bots.set(b.name, {
+      name: b.name, C: c, base: b.base_tokens ?? Math.min(c, 8000), own: b.own_wakes_per_day ?? 0,
+      k: b.work_rounds_per_wake ?? 1, readsBoard: reads, boardRead: b.board_read_tokens ?? (reads ? 2000 : 0),
+      out: (b.output_tokens_per_wake ?? 300) + (b.reasoning_tokens_per_wake ?? 0),
+      cacheHit: b.cache_hit_ratio ?? 0.8, growthOverride: b.growth_per_day ?? null, msgWakes: 0, growth: 0,
+    });
+  }
+  for (const ln of org.links || []) {
+    const to = bots.get(ln.to);
+    if (!to || !bots.has(ln.from)) throw new Error(`unknown bot in link ${ln.from} -> ${ln.to}`);
+    to.msgWakes += ln.messages_per_day;
+    to.growth += ln.messages_per_day * ln.avg_tokens;
+  }
+  for (const g of org.groups || []) {
+    const wakeAll = (g.wake || "addressed") === "all";
+    for (const m of g.members) {
+      const b = bots.get(m);
+      b.growth += g.messages_per_day * g.avg_tokens;
+      b.msgWakes += wakeAll ? g.messages_per_day : g.messages_per_day / g.members.length;
+    }
+  }
+  let total = 0, totalOut = 0;
+  const rows = [];
+  for (const b of bots.values()) {
+    const wakes = b.own + b.msgWakes;
+    const extraBoard = b.readsBoard ? b.msgWakes : 0;
+    const rounds = wakes * (1 + b.k) + extraBoard;
+    let growth = b.growth + wakes * b.out + extraBoard * b.boardRead;
+    if (b.growthOverride !== null) growth = b.growthOverride;
+    const p = b.cacheHit * rCache + (1 - b.cacheHit);
+    let cin = 0, cout = 0;
+    const nSteps = Math.max(1, Math.trunc(H * 24));
+    const dt = H / nSteps;
+    for (let i = 0; i < nSteps; i++) {
+      const ct = b.C + growth * (i + 0.5) * dt;
+      const long = ct >= thr;
+      cin += rounds * dt * ct * p * (long ? lm.input : 1);
+      cout += wakes * dt * b.out * rOut * (long ? lm.output : 1);
+    }
+    total += cin + cout;
+    totalOut += cout;
+    rows.push({ bot: b.name, C_now: b.C, C_end: b.C + growth * H, wakes_per_day: wakes, rounds_per_day: rounds,
+                input_eq: cin, output_eq: cout, cost_eq: cin + cout,
+                cost_usd: ((cin + cout) * pricing.per_million.input) / 1e6 });
+  }
+  rows.sort((a, b) => b.cost_eq - a.cost_eq);
+  const usd = (x) => (x * pricing.per_million.input) / 1e6;
+  return { horizon_days: H, total_eq: total, total_usd: usd(total), output_usd: usd(totalOut), bots: rows };
+}
