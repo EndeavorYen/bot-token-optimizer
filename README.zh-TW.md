@@ -16,6 +16,12 @@
 
 **bot-token-optimizer** 找出一群常駐 bot 把 token 花在哪裡，並告訴你怎麼止血。它讀取你的用量匯出檔，模擬 bot 之間如何互相喚醒，再依省錢多寡排出該做的改變：公式可以檢查、數字可以重現，給 bot 的指令可以直接貼上。
 
+> **一句話看懂**
+>
+> 1. bot 每次被叫醒，都要把整段對話重讀一遍。
+> 2. 所以帳單主要取決於 bot 之間多常互相叫醒、對話已經拉得多長，而不是做了多少事。
+> 3. 減少不必要的喚醒（「OK」回覆、轉話、讀 board 的來回），並定期開新的 chat，同樣的工作就能省下大半費用（模擬範例只剩原本的 0.09 倍）。
+
 <p align="center">
   <a href="https://endeavoryen.github.io/bot-token-optimizer/calculator/">
     <img src="docs/images/calculator.zh-TW.png" alt="網頁計算器：選一個團隊、回答六個問題，就能看到每週帳單、每則訊息流動的即時團隊圖，以及最省錢的改善項目" width="92%">

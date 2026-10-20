@@ -16,6 +16,12 @@
 
 **bot-token-optimizer** finds where a team of persistent bots spends its tokens and shows how to stop the waste. It reads your usage export, models how your bots wake each other up, and ranks the changes that save the most: with formulas you can check, numbers you can reproduce, and instructions you can paste straight into your bots.
 
+> **In plain words**
+>
+> 1. A bot re-reads its whole conversation every time it is woken up.
+> 2. So your bill depends on how often your bots wake each other up and how long their conversations have grown, far more than on how much work they do.
+> 3. Cut the needless wake-ups ("OK" replies, relays, board pings) and start fresh chats regularly, and the same work costs a fraction of what it did (0.09× in our simulated example).
+
 <p align="center">
   <a href="https://endeavoryen.github.io/bot-token-optimizer/calculator/">
     <img src="docs/images/calculator.en.png" alt="The web calculator: pick a team, answer six questions, see the weekly bill, a live diagram of every message, and the fixes that save the most" width="92%">
