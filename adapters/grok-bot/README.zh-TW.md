@@ -4,7 +4,7 @@
 
 在 Grok Bot 建立一個「Token 最佳化顧問」，用量暴增或想調整 bot 分工時呼叫它。
 
-## 平台限制（platform.json）
+## 平台限制（`--platform grok-bot`）
 
 - 一個群組最多 6 個 Bot，所以控制幅度上限為 6。
 - 使用者無法改寫 Bot 的上下文。能用的槓桿是：溝通管道（一對一或群組）、用程式寫檔、減少喚醒、開新 chat 交接。
@@ -23,7 +23,7 @@
 分析器會自動辨識常見欄名（timestamp、bot_name、input_tokens、cached_input_tokens、output_tokens、reasoning_tokens、cost_usd 等）。Grok Bot 匯出檔的實際欄名尚未驗證，對不上時用 `--map`：
 
 ```bash
-python3 core/analyze_usage.py usage.csv --platform adapters/grok-bot/platform.json \
+python3 core/cli.py analyze usage.csv --platform grok-bot \
   --map time=<時間欄> --map bot=<Bot 欄> --map input=<input token 欄>
 ```
 

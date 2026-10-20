@@ -1,0 +1,14 @@
+settings horizon=7 soft_cap=120k handover=3k
+bot chief      100k base=8k wakes=3 rounds=1
+bot lead       60k base=6k rounds=0
+bot researcher 30k base=5k rounds=3 board
+bot writer     30k base=5k rounds=2 board
+bot reviewer   25k base=5k rounds=1
+chief -> lead : 6/day 800
+lead -> researcher : 6/day 700
+researcher -> writer : 6/day 120
+writer -> reviewer : 6/day 120
+reviewer -> chief : 6/day 1500
+writer -> researcher : 6/day 15
+reviewer -> writer : 6/day 15
+group all-hands : chief lead researcher writer reviewer : 10/day 900

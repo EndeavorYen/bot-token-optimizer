@@ -4,7 +4,7 @@
 
 多 bot 系統的成本約等於「喚醒次數 × 每次喚醒的呼叫輪數 × 上下文 C」。最有效的改善是減少喚醒、縮小 C，而不是縮短訊息本身。
 
-本文的公式與數字都由 `core/` 中經過測試的腳本計算，可用 `python3 core/orgopt.py` 重算。範例中的平台限制與價格以 Grok Bot 為準，其他 bot 平台請替換成自己的數字。
+本文的公式與數字都由 `core/` 中經過測試的腳本計算，可用 `bto` 指令重算（`pip install` 這個 repo，或直接執行 `python3 core/cli.py`）。範例中的平台限制與價格以 Grok Bot 為準，其他 bot 平台請替換成自己的數字。
 
 ## 摘要
 
@@ -21,12 +21,13 @@
 bot 每被呼叫一輪，就要重讀一次完整上下文 C，所以成本由喚醒次數、每次喚醒的輪數和 C 三者相乘決定。
 
 ```math
-\text{成本} \approx \sum_{\text{bot}} W \times R \times C \times p, \qquad p = h \cdot r + (1 - h)
+\text{成本} \approx \sum_{\text{bot}} \Big( W \times R \times C \times p \;+\; W \times O \times o \Big), \qquad p = h \cdot r + (1 - h)
 ```
 
 - W：每天被喚醒幾次；R：每次喚醒的呼叫輪數（1 + 為自己工作做的工具呼叫輪數）
 - C：當下的上下文大小，會隨收到的訊息、讀進來的內容、自己的輸出持續成長，直到交接重建
 - p：價格係數。h 是快取命中率，r 是快取價相對原價的比例
+- O：每次喚醒寫出的 output，包含推理（思考）token；o：output 價相對 input 價的倍數。推理模型花在 O 上的可能比你想的多，而且每多一輪呼叫就多一份
 - 上下文達到 200K 時，整個請求改用長上下文價格，單價翻倍
 
 | 價目（grok-4.7，每百萬 token） | input | 快取 input | output |
@@ -34,7 +35,7 @@ bot 每被呼叫一輪，就要重讀一次完整上下文 C，所以成本由�
 | prompt 低於 200K | $2.00 | $0.50 | $6.00 |
 | prompt 達 200K 以上 | $4.00 | $1.00 | $12.00 |
 
-價目來源：[mem0 Grok API 價目整理](https://mem0.ai/library/llms-and-models/xai-grok-api-pricing)（2026-10 查詢）。價格設定放在 `pricing/`，可隨時更新。若平台為訂閱制，美元數字代表等值成本，用來比較方案。
+價目來源：[mem0 Grok API 價目整理](https://mem0.ai/library/llms-and-models/xai-grok-api-pricing)（2026-10 查詢）。`core/pricing/` 內有 8 個模型的價格設定（xAI、OpenAI、Anthropic、Google），用 `bto presets` 列出、用 `--pricing` 選用。各家的長上下文門檻位置和加價幅度都不同（Grok 在 200K 起 2 倍；OpenAI 在 272K 以上 input 2 倍、output 1.5 倍；Claude Haiku 在 100K 以上 5 倍；另有幾家沒有加價）。若平台為訂閱制，美元數字代表等值成本，用來比較方案。
 
 這個模型帶出三個直接推論：
 
@@ -66,7 +67,7 @@ bot 每被呼叫一輪，就要重讀一次完整上下文 C，所以成本由�
 倍數跟訊息長度無關，只看 bot 每次喚醒做多少事。board 的價值在協作與持久化，不在省 token。
 
 ```bash
-python3 core/orgopt.py board --k 1 --mode sequential
+bto board --k 1 --mode sequential
 ```
 
 ### leader 值不值得
@@ -83,8 +84,8 @@ python3 core/orgopt.py board --k 1 --mode sequential
 只轉話的 leader 讓成本接近翻倍。會彙整的 leader 把喚醒從最貴的總管移到較便宜的 leader，而且總管只收一份摘要，之後每次喚醒也更便宜。
 
 ```bash
-python3 core/orgopt.py scenario relay
-python3 core/orgopt.py scenario aggregate --n 6
+bto scenario relay
+bto scenario aggregate --n 6
 ```
 
 ### 一個主管該帶幾個
@@ -103,10 +104,10 @@ k^{*} \approx 1 + \sqrt{1 + \frac{2 C_0}{m}}
 
 ![回報越短，一個主管能帶越多 bot](images/span-of-control.zh-TW.svg)
 
-數值最佳解以 2,000 個 worker、不設上限計算。回報寫得越短，主管能帶的人越多、組織越扁平。實務上還有平台的硬上限，例如 Grok Bot 一個群組最多 6 個 Bot（`adapters/grok-bot/platform.json`）。
+數值最佳解以 2,000 個 worker、不設上限計算。回報寫得越短，主管能帶的人越多、組織越扁平。實務上還有平台的硬上限，例如 Grok Bot 一個群組最多 6 個 Bot（`--platform grok-bot`）。
 
 ```bash
-python3 core/orgopt.py --platform adapters/grok-bot/platform.json span --n 12 --c0 30000 --m 1000
+bto span --n 12 --c0 30000 --m 1000 --platform grok-bot
 ```
 
 ### 何時交接重建
@@ -132,7 +133,7 @@ C_{\text{new}} = C_{\text{base}} + H, \qquad \text{回本喚醒次數} = \frac{p
 只看 token，重建幾乎都在兩三次喚醒內回本。真正的限制是交接時遺失的知識，以及手動重建的人力，所以實務上採「定期重建」：在 C 長到品質軟上限或 200K 門檻的四分之三之前交接。腳本會依實測成長速度算出建議週期。
 
 ```bash
-python3 core/orgopt.py reset --c 150000 --c-base 8000 --wakes-per-day 10
+bto reset --c 150000 --c-base 8000 --wakes-per-day 10
 ```
 
 ## 架構決策
@@ -168,24 +169,41 @@ flowchart TD
 | 長期不重建 | C 持續成長，越用越慢越貴 | 每次喚醒都更貴，越過 200K 單價翻倍 | 依門檻定期交接、開新 chat |
 | 總管管太細 | 總管占總成本比例最高 | 最大的 C 乘上最多的喚醒 | 下屬交摘要，總管只處理例外 |
 
-改掉這些反模式的效果，可以用範例團隊來看（`samples/`）：
+改掉這些反模式的效果，可以用範例團隊來看（`bto compare samples/org_before.txt samples/org_after.txt`）：
 
-![範例改組：7 天成本 $256 → $25](images/before-after.zh-TW.svg)
+![模擬改組：7 天成本 $257 → $25](images/before-after.zh-TW.svg)
+
+這是模型對範例資料的模擬結果，不是實際帳單。[顧問示範](advisor-demo.zh-TW.md)有一次完整的諮詢過程。
+
+交接鏈太長也是延遲問題：每多一跳就多一輪等待。`bto org` 會列出最長的交接鏈，達 5 跳以上時提出警示。
 
 兩個可以直接套用的格式：
 
 - 交接通知：檔案路徑 + 一句摘要 + 要對方做什麼 + 要讀哪一段。例如「board#42 v7｜API 規格已定稿｜請實作 /auth，只需讀第 3 節」。
 - 重建前的交接摘要：目標、已做的決定、未完成事項、重要檔案位置，控制在約 3k token 以內。
 
+### 交接之前：哪些東西可能會遺失
+
+重建門檻的公式只算 token。把 bot 移到新的 chat 之前，請確認交接摘要帶走了必要的內容，因為沒寫進去的就會消失：
+
+- [ ] 已經做出的決定和理由（避免新 chat 重新討論）
+- [ ] 使用者過程中提過的限制和偏好
+- [ ] 未完成事項、負責人與期限
+- [ ] 檔案、board 和連結的位置
+- [ ] 已經試過、被否決的做法
+- [ ] 其他 bot 期待這個 bot 記得的事
+
+如果一個 bot 的價值主要在於大量沒寫下來的記憶（例如客戶往來紀錄），就降低交接頻率，或先把這些記憶整理成檔案。
+
 ## 量測與校正
 
 usage CSV 提供模型需要的真實參數；模型回推的成本與實際誤差在 ±15% 內，才用它推估改組效果。
 
 1. 從 bot 平台匯出 usage CSV，最好涵蓋至少 3 天、包含所有 bot。
-2. 執行 `core/analyze_usage.py`：自動對應欄位，依 bot 算出喚醒次數、每次喚醒輪數、目前 C、每日成長、快取命中率。
+2. 執行 `bto analyze usage.csv --platform grok-bot --org-out org.json`：自動對應欄位，依每份上下文算出喚醒次數、每次喚醒輪數、目前 C、每日成長、快取命中率。
 3. 檢查報告中的「模型校正」誤差。超過 ±15% 時只採用實測發現，常見原因是喚醒切分間隔不合適或成長不是線性。
-4. 把 bot 之間的溝通關係補進產出的 org.json，執行 `core/orgopt.py org` 取得診斷。
-5. 寫出改組方案，用 `core/orgopt.py compare` 比較前後總成本。
+4. 補上 bot 之間的溝通關係（編輯 org.json，或用 org.txt／`bto init` 描述團隊），執行 `bto org` 取得診斷。
+5. 寫出改組方案，用 `bto compare` 比較前後總成本。
 6. 改完一週後再匯出一次 CSV，確認實際效果。
 
 分析器的偵測規則（皆為啟發式，請對照實際對話確認）：
@@ -199,7 +217,28 @@ usage CSV 提供模型需要的真實參數；模型回推的成本與實際誤�
 | 快取命中偏低 | 命中率低於 50%（至少 10 次呼叫） | 修改早期上下文、喚醒間隔太長 |
 | 成本熱點 | 占總成本 30% 以上且高於 1.5 / bot 數 | 總管管太細、喚醒過多 |
 
-喚醒次數是用「同一 bot 連續呼叫間隔 120 秒內視為同一次喚醒」切分的估計值，可用 `--gap` 調整。
+喚醒次數是用「同一份上下文連續呼叫間隔 120 秒內視為同一次喚醒」切分的估計值，可用 `--gap` 調整。
+
+有三個細節讓量測結果可信：
+
+- **每個 chat 是獨立的上下文。** 一個 bot 同時跑好幾個 chat 或 thread 時，每個都各自累積上下文，所以 CSV 有 chat 欄位時，分析器會以 `bot/chat` 為單位列出。混在一起算，大小和成長速度都會失真。
+- **會偵測你已經做過的交接。** 某次喚醒的上下文小於前一次的 60%（而且至少少 5K）時，視為新的一段。成長速度在每一段內計算，所以鋸齒狀的資料不會被誤判成緩慢平坦的直線。
+- **output 也一起計價。** 校正時比較的是模型的 input + output 成本與實際花費（CSV 有成本欄位時直接採用）。
+
+### 描述你的團隊
+
+CSV 看不出誰叫醒了誰，所以溝通關係要由你提供。最簡單的方式是 `org.txt`，一行一個 bot、一條關係或一個群組：
+
+```text
+settings horizon=7 soft_cap=120k
+bot chief      100k base=8k wakes=3 rounds=1
+bot researcher 30k  rounds=3 board
+chief -> researcher : 6/day 800
+researcher -> chief : 6/day 15
+group team : chief researcher : 10/day 300 wake=all
+```
+
+bot 的選項：`base`（重建後保留的基礎設定）、`wakes`（不是由其他 bot 造成的喚醒）、`rounds`（為自己工作做的工具呼叫輪數）、`board`（每次被通知後先讀 board）、`out`／`reasoning`（每次喚醒寫出的 token）、`cache`（快取命中率）、`growth`（實測的每日成長）。數字可以用 `k` 和 `M`。`bto init` 會用問答幫你產生；`bto convert` 可以在 org.txt 和 org.json 之間轉換。所有問題會一次列出，並標明行號。
 
 ## 顧問 bot
 
@@ -218,7 +257,9 @@ usage CSV 提供模型需要的真實參數；模型回推的成本與實際誤�
 模型抓的是方向和量級，不是精確帳單；以下限制在解讀結果時要記得。
 
 - 假設每輪呼叫都讀完整 C；平台若有自動壓縮上下文，實際成本會較低。
-- 上下文成長以線性近似。
+- 兩次交接之間的上下文成長以線性近似。
+- 目前的校正只用過依模型假設產生的合成資料，所以那裡的小誤差證明不了什麼，真實匯出檔才是真正的考驗。
+- 對快取寫入另外收費、而且比一般 input 貴的廠商（OpenAI、Anthropic），模型只用快取讀取價計算，成本會略為低估。
 - 品質沒有進入成本公式：上下文太長時注意力下降、交接時知識遺失，都要另外判斷。
 - 延遲另外計算：每多一層就多一輪等待。
 - Grok Bot usage CSV 的實際欄位尚未驗證；第一次使用真實檔案時，請確認欄位對應與校正誤差。

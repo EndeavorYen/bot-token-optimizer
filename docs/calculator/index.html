@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Token Calculator</title>
+<meta name="description" content="What-if calculator for the token cost of persistent bots: context growth, board round-trips, relay leaders, span of control, hand-overs.">
+<style>
+  :root {
+    --bg: #F6F7F9; --card: #FFFFFF; --ink: #111827; --muted: #6B7280; --line: #E5E7EB;
+    --bad: #E4572E; --good: #2E86AB; --warn: #F2A541; --neutral: #A3AAB5; --accent-bg: #0F172A;
+    --field: #F3F4F6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0B0F17; --card: #131A26; --ink: #E5E7EB; --muted: #9CA3AF; --line: #263041;
+      --field: #1B2433; --good: #5DADE2; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 Inter, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; }
+  header { background: var(--accent-bg); color: #F8FAFC; padding: 28px 16px 24px; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+  header .wrap { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between; padding: 0; }
+  h1 { margin: 0; font: 800 26px/1.2 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; }
+  header p { margin: 6px 0 0; color: #94A3B8; max-width: 620px; }
+  .formula { display: inline-block; margin-top: 12px; padding: 6px 14px; border-radius: 999px; background: #1E293B;
+    color: var(--warn); font-weight: 600; font-size: 14px; }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  select, input { font: inherit; color: var(--ink); background: var(--field); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 8px; }
+  header select { background: #1E293B; color: #F8FAFC; border-color: #334155; }
+  .lang button { font: inherit; border: 1px solid #334155; background: transparent; color: #CBD5E1; padding: 5px 12px; cursor: pointer; }
+  .lang button:first-child { border-radius: 8px 0 0 8px; } .lang button:last-child { border-radius: 0 8px 8px 0; }
+  .lang button[aria-pressed="true"] { background: #F8FAFC; color: #0F172A; }
+  main { padding: 24px 0 40px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 16px; }
+  .card.wide { grid-column: 1 / -1; }
+  .card h2 { margin: 0; font-size: 17px; }
+  .card .lead { margin: 4px 0 14px; color: var(--muted); font-size: 13.5px; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 12px; }
+  label { display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; font-size: 12.5px; color: var(--muted); }
+  label input, label select { width: 100%; }
+  .result { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .big { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; }
+  .big.bad { color: var(--bad); } .big.good { color: var(--good); }
+  .note { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .bars { display: grid; gap: 6px; margin-top: 8px; }
+  .bar { display: grid; grid-template-columns: 90px 1fr 130px; align-items: center; gap: 8px; font-size: 13px; }
+  .bar span:last-child { white-space: nowrap; }
+  .bar span:first-child { color: var(--muted); text-align: right; }
+  .bar .track { height: 18px; background: var(--field); border-radius: 5px; overflow: hidden; }
+  .bar .fill { height: 100%; border-radius: 5px; }
+  .kpis { display: flex; flex-wrap: wrap; gap: 18px 28px; }
+  .kpi .label { color: var(--muted); font-size: 12.5px; }
+  svg text { fill: var(--muted); font-size: 11px; }
+  footer { color: var(--muted); font-size: 13px; padding-bottom: 32px; }
+  footer a, .card a { color: var(--good); }
+  @media (max-width: 520px) { .bar { grid-template-columns: 70px 1fr 120px; } h1 { font-size: 21px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div>
+      <h1>bot-token-optimizer</h1>
+      <p data-i18n="tagline"></p>
+      <span class="formula" data-i18n="formula"></span>
+    </div>
+    <div class="controls">
+      <label style="color:#94A3B8"><span data-i18n="pricing"></span><select id="preset"></select></label>
+      <div class="lang" role="group" aria-label="Language">
+        <button id="lang-en" type="button">EN</button><button id="lang-zh" type="button">中文</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="grid">
+    <section class="card wide" id="growth">
+      <h2 data-i18n="g.title"></h2>
+      <p class="lead" data-i18n="g.lead"></p>
+      <div class="fields">
+        <label><span data-i18n="g.c0"></span><input type="number" id="g-c0" value="20000" min="0" step="1000"></label>
+        <label><span data-i18n="g.growth"></span><input type="number" id="g-growth" value="15000" min="0" step="1000"></label>
+        <label><span data-i18n="g.wakes"></span><input type="number" id="g-wakes" value="10" min="0" step="1"></label>
+        <label><span data-i18n="g.days"></span><input type="number" id="g-days" value="14" min="1" max="90" step="1"></label>
+        <label><span data-i18n="g.reset"></span><input type="number" id="g-reset" value="90000" min="12000" step="5000"></label>
+      </div>
+      <div class="result">
+        <div class="kpis">
+          <div class="kpi"><div class="label" data-i18n="g.never"></div><div class="big bad" id="g-out-no"></div></div>
+          <div class="kpi"><div class="label" data-i18n="g.with"></div><div class="big good" id="g-out-yes"></div></div>
+          <div class="kpi"><div class="label" data-i18n="g.ratio"></div><div class="big" id="g-out-ratio"></div></div>
+        </div>
+        <svg id="g-chart" viewBox="0 0 1000 200" width="100%" role="img" aria-label="context growth chart"></svg>
+        <div class="note" id="g-note"></div>
+      </div>
+    </section>
+
+    <section class="card" id="board">
+      <h2 data-i18n="b.title"></h2>
+      <p class="lead" data-i18n="b.lead"></p>
+      <div class="fields">
+        <label><span data-i18n="b.k"></span><input type="number" id="b-k" value="1" min="0" max="20" step="1"></label>
+        <label><span data-i18n="b.mode"></span><select id="b-mode"><option value="sequential" data-i18n="b.seq"></option><option value="parallel" data-i18n="b.par"></option></select></label>
+      </div>
+      <div class="result">
+        <div class="big bad" id="b-out"></div>
+        <div class="note" id="b-note"></div>
+      </div>
+    </section>
+
+    <section class="card" id="leader">
+      <h2 data-i18n="l.title"></h2>
+      <p class="lead" data-i18n="l.lead"></p>
+      <div class="fields">
+        <label><span data-i18n="l.cw"></span><input type="number" id="l-cw" value="30000" min="0" step="1000"></label>
+        <label><span data-i18n="l.cl"></span><input type="number" id="l-cl" value="60000" min="0" step="1000"></label>
+        <label><span data-i18n="l.cc"></span><input type="number" id="l-cc" value="100000" min="0" step="1000"></label>
+        <label><span data-i18n="l.n"></span><input type="number" id="l-n" value="6" min="1" max="50" step="1"></label>
+      </div>
+      <div class="result" id="l-out"></div>
+    </section>
+
+    <section class="card" id="span">
+      <h2 data-i18n="s.title"></h2>
+      <p class="lead" data-i18n="s.lead"></p>
+      <div class="fields">
+        <label><span data-i18n="s.n"></span><input type="number" id="s-n" value="12" min="2" max="500" step="1"></label>
+        <label><span data-i18n="s.c0"></span><input type="number" id="s-c0" value="30000" min="0" step="1000"></label>
+        <label><span data-i18n="s.m"></span><input type="number" id="s-m" value="1000" min="10" step="100"></label>
+        <label><span data-i18n="s.cap"></span><input type="number" id="s-cap" value="6" min="2" max="100" step="1"></label>
+      </div>
+      <div class="result">
+        <div class="kpis">
+          <div class="kpi"><div class="label" data-i18n="s.best"></div><div class="big good" id="s-out-best"></div></div>
+          <div class="kpi"><div class="label" data-i18n="s.closed"></div><div class="big" id="s-out-closed"></div></div>
+        </div>
+        <div class="note" id="s-note"></div>
+      </div>
+    </section>
+
+    <section class="card" id="reset">
+      <h2 data-i18n="r.title"></h2>
+      <p class="lead" data-i18n="r.lead"></p>
+      <div class="fields">
+        <label><span data-i18n="r.c"></span><input type="number" id="r-c" value="150000" min="0" step="5000"></label>
+        <label><span data-i18n="r.base"></span><input type="number" id="r-base" value="8000" min="0" step="1000"></label>
+        <label><span data-i18n="r.handover"></span><input type="number" id="r-handover" value="3000" min="0" step="500"></label>
+        <label><span data-i18n="r.wakes"></span><input type="number" id="r-wakes" value="10" min="0" step="1"></label>
+        <label><span data-i18n="r.days"></span><input type="number" id="r-days" value="7" min="1" step="1"></label>
+        <label><span data-i18n="r.cache"></span><input type="number" id="r-cache" value="0.8" min="0" max="1" step="0.05"></label>
+      </div>
+      <div class="result">
+        <div class="kpis">
+          <div class="kpi"><div class="label" data-i18n="r.breakeven"></div><div class="big" id="r-out-be"></div></div>
+          <div class="kpi"><div class="label" data-i18n="r.net"></div><div class="big good" id="r-out-net"></div></div>
+        </div>
+        <div class="note" id="r-note"></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="wrap">
+  <p id="foot"></p>
+</footer>
+
+<script type="module">
+import * as calc from "./calc.js";
+import { PRESETS } from "./presets.js";
+
+const T = {
+  en: {
+    tagline: "What-if calculator for persistent bots. Every number uses the same formulas as the tested Python model.",
+    formula: "cost ≈ wake-ups × calls per wake-up × context",
+    pricing: "Pricing preset",
+    "g.title": "Context keeps growing until you hand over",
+    "g.lead": "One bot whose context grows every day. Compare never resetting with handing over to a fresh chat at a threshold (80% cache hits).",
+    "g.c0": "Starting context (tokens)", "g.growth": "Growth per day (tokens)", "g.wakes": "Wake-ups per day",
+    "g.days": "Days", "g.reset": "Hand over at (tokens)",
+    "g.never": "Never reset", "g.with": "With hand-overs", "g.ratio": "Cost ratio",
+    "g.note": (r, thr) => `${r} hand-over(s) in the period.` + (thr ? ` Above ${fmt(thr)} tokens this model bills the whole request at the long-context price.` : ""),
+    "b.title": "“Write to a board, then ping”",
+    "b.lead": "The receiver re-reads its full context to handle the ping, then again after fetching the board.",
+    "b.k": "Rounds of own work per wake-up (k)", "b.mode": "How the sender works",
+    "b.seq": "Write, then notify", "b.par": "Write + notify in one step",
+    "b.out": (x) => `${x.toFixed(2)}× tokens`,
+    "b.note": (c) => `vs. putting the content in the message. Receiver cost with a cold cache: ${c.toFixed(2)}×.`,
+    "l.title": "Relay leader vs. summarizing leader",
+    "l.lead": "A layer adds two wake-ups per task. It pays off only if it compresses reports for an expensive chief.",
+    "l.cw": "Worker context", "l.cl": "Leader context", "l.cc": "Chief context", "l.n": "Parallel subtasks",
+    "l.relay": "Single task, leader only relays", "l.agg": "Subtasks, leader sends one summary",
+    "l.flat": "Flat", "l.hier": "With leader",
+    "s.title": "How many bots per manager?",
+    "s.lead": "Each report wakes the manager and stays in its context. Shorter reports allow a wider span.",
+    "s.n": "Workers", "s.c0": "Manager base context", "s.m": "Tokens per report", "s.cap": "Platform limit",
+    "s.best": "Best span (within limit)", "s.closed": "Unconstrained k*",
+    "s.note": (b) => `${b.managers} manager(s), ${b.depth} layer(s) of waiting, ${fmt(b.cost)} tokens read by managers.`,
+    "r.title": "Time to hand over?",
+    "r.lead": "One read of the old context to write a summary, then every wake-up is cheaper.",
+    "r.c": "Current context", "r.base": "Base setup kept after reset", "r.handover": "Hand-over summary",
+    "r.wakes": "Wake-ups per day", "r.days": "Horizon (days)", "r.cache": "Cache hit rate",
+    "r.breakeven": "Pays off after", "r.net": "Net saving over the horizon",
+    "r.be": (x) => isFinite(x) ? `${x.toFixed(1)} wake-ups` : "never",
+    "r.note": (e) => `${e} wake-ups expected over the horizon. Knowledge lost in the hand-over is not priced in.`,
+    foot: (d) => `Formulas: <a href="https://github.com/EndeavorYen/bot-token-optimizer">bot-token-optimizer</a> (core/orgopt.py). Prices checked ${d}; verify with your provider. Results are estimates, not a bill.`,
+  },
+  "zh-TW": {
+    tagline: "常駐 bot 的「如果…會怎樣」計算器。所有數字都和經過測試的 Python 模型用同一套公式。",
+    formula: "成本 ≈ 喚醒次數 × 每次喚醒的輪數 × 上下文",
+    pricing: "價格設定",
+    "g.title": "上下文會一直長大，直到你交接",
+    "g.lead": "一個上下文每天成長的 bot。比較從不重建，和到門檻就交接給新 chat 的差別（快取命中 80%）。",
+    "g.c0": "起始上下文（token）", "g.growth": "每天成長（token）", "g.wakes": "每天喚醒次數",
+    "g.days": "天數", "g.reset": "到多大就交接（token）",
+    "g.never": "從不重建", "g.with": "定期交接", "g.ratio": "成本比",
+    "g.note": (r, thr) => `期間內交接 ${r} 次。` + (thr ? `上下文超過 ${fmt(thr)} token 時，這個模型的整個請求改用長上下文價格。` : ""),
+    "b.title": "「寫到 board，再通知對方」",
+    "b.lead": "接收方處理通知要重讀一次完整上下文，讀完 board 後又再讀一次。",
+    "b.k": "每次喚醒為自己工作做幾輪（k）", "b.mode": "發送方的做法",
+    "b.seq": "先寫 board 再通知", "b.par": "寫 board 與通知同一步",
+    "b.out": (x) => `${x.toFixed(2)} 倍 token`,
+    "b.note": (c) => `相對直接把內容放進訊息。喚醒時快取失效的接收方成本：${c.toFixed(2)} 倍。`,
+    "l.title": "轉話 leader vs 彙整 leader",
+    "l.lead": "每多一層，每個任務多兩次喚醒。只有替昂貴的總管壓縮報告時才划算。",
+    "l.cw": "worker 上下文", "l.cl": "leader 上下文", "l.cc": "總管上下文", "l.n": "平行子任務數",
+    "l.relay": "單一任務，leader 只轉話", "l.agg": "多個子任務，leader 交一份摘要",
+    "l.flat": "扁平", "l.hier": "有 leader",
+    "s.title": "一個主管該帶幾個 bot？",
+    "s.lead": "每則回報都會叫醒主管，也會留在它的上下文裡。回報越短，能帶越多。",
+    "s.n": "worker 數", "s.c0": "主管基礎上下文", "s.m": "每則回報 token", "s.cap": "平台上限",
+    "s.best": "最佳控制幅度（在上限內）", "s.closed": "不設上限的 k*",
+    "s.note": (b) => `${b.managers} 個主管、${b.depth} 層等待，主管共讀取 ${fmt(b.cost)} token。`,
+    "r.title": "該交接了嗎？",
+    "r.lead": "舊上下文讀一次來寫摘要，之後每次喚醒都變便宜。",
+    "r.c": "目前上下文", "r.base": "重建後保留的基礎設定", "r.handover": "交接摘要長度",
+    "r.wakes": "每天喚醒次數", "r.days": "期間（天）", "r.cache": "快取命中率",
+    "r.breakeven": "幾次喚醒後回本", "r.net": "期間內淨省",
+    "r.be": (x) => isFinite(x) ? `${x.toFixed(1)} 次` : "不會回本",
+    "r.note": (e) => `期間內預計喚醒 ${e} 次。交接時遺失的知識沒有算進去。`,
+    foot: (d) => `公式來源：<a href="https://github.com/EndeavorYen/bot-token-optimizer">bot-token-optimizer</a>（core/orgopt.py）。價格查詢日期 ${d}，請以供應商公告為準。結果為估算，不是帳單。`,
+  },
+};
+
+const $ = (id) => document.getElementById(id);
+const num = (id) => Math.max(0, parseFloat($(id).value) || 0);
+const fmt = (x) => Math.round(x).toLocaleString("en-US");
+const usd = (x) => `$${x.toFixed(2)}`;
+function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } }
+
+const sel = $("preset");
+for (const [key, p] of Object.entries(PRESETS)) {
+  const o = document.createElement("option");
+  o.value = key; o.textContent = p.label; sel.appendChild(o);
+}
+sel.value = "grok-4.7";
+let lang = localStorageGet("bto-lang") || ((navigator.language || "").toLowerCase().startsWith("zh") ? "zh-TW" : "en");
+
+function tr(key, ...args) {
+  const v = T[lang][key];
+  return typeof v === "function" ? v(...args) : v;
+}
+
+function chart(svg, series, thr, days) {
+  const W = 1000, H = 200, pad = 30;
+  const maxY = Math.max(...series.flatMap((s) => s.pts.map((p) => p[1])), thr && thr < 1e9 ? thr * 1.05 : 0, 1);
+  const maxX = Math.max(...series.flatMap((s) => s.pts.map((p) => p[0])), 1);
+  const X = (x) => pad + (x / maxX) * (W - pad - 10), Y = (y) => H - pad - (y / maxY) * (H - pad - 10);
+  let out = `<line x1="${pad}" y1="${H - pad}" x2="${W - 10}" y2="${H - pad}" stroke="var(--line)"/>`;
+  if (thr && thr <= maxY) out += `<line x1="${pad}" y1="${Y(thr)}" x2="${W - 10}" y2="${Y(thr)}" stroke="var(--warn)" stroke-dasharray="6 5" stroke-width="2"/><text x="${pad + 6}" y="${Y(thr) - 6}">${fmt(thr)}</text>`;
+  for (const s of series) {
+    out += `<polyline fill="none" stroke="${s.color}" stroke-width="3" stroke-linejoin="round" points="${s.pts.map((p) => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ")}"/>`;
+  }
+  out += `<text x="${pad}" y="${H - 8}">0</text><text x="${W - 10}" y="${H - 8}" text-anchor="end">${days}d</text>`;
+  svg.innerHTML = out;
+}
+
+function series(c0, growth, days, resetAt) {
+  const pts = []; let c = c0;
+  for (let t = 0; t <= days + 1e-9; t += 0.05) {
+    pts.push([t, c]); c += growth * 0.05;
+    if (resetAt && c >= resetAt) { pts.push([t + 0.05, c]); c = 11000; }
+  }
+  return pts;
+}
+
+function bar(label, value, max, color, text) {
+  return `<div class="bar"><span>${label}</span><div class="track"><div class="fill" style="width:${(100 * value / max).toFixed(1)}%;background:${color}"></div></div><span>${text}</span></div>`;
+}
+
+function render() {
+  document.documentElement.lang = lang === "zh-TW" ? "zh-Hant" : "en";
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = tr(el.dataset.i18n); });
+  $("lang-en").setAttribute("aria-pressed", lang === "en");
+  $("lang-zh").setAttribute("aria-pressed", lang === "zh-TW");
+  const p = PRESETS[sel.value];
+  const thr = p.long_context_threshold;
+
+  // growth
+  const g = { c0: num("g-c0"), growth: num("g-growth"), wakesPerDay: num("g-wakes"), days: Math.min(num("g-days"), 90) || 1 };
+  const no = calc.growthCost(p, g), yes = calc.growthCost(p, { ...g, resetAt: Math.max(num("g-reset"), 12000) });
+  $("g-out-no").textContent = usd(no.cost);
+  $("g-out-yes").textContent = usd(yes.cost);
+  $("g-out-ratio").textContent = no.cost ? `${(yes.cost / no.cost).toFixed(2)}×` : "–";
+  $("g-note").textContent = tr("g.note", yes.resets, thr);
+  chart($("g-chart"), [{ pts: series(g.c0, g.growth, g.days, null), color: "var(--bad)" },
+                       { pts: series(g.c0, g.growth, g.days, Math.max(num("g-reset"), 12000)), color: "var(--good)" }], thr, g.days);
+
+  // board
+  const b = calc.boardOverhead(Math.round(num("b-k")), $("b-mode").value, calc.priceRatios(p).cache);
+  $("b-out").textContent = tr("b.out", b.token_ratio);
+  $("b-note").textContent = tr("b.note", b.receiver_cost_ratio_cold_cache);
+
+  // leader
+  const cw = num("l-cw"), cl = num("l-cl"), cc = num("l-cc"), n = Math.max(1, Math.round(num("l-n")));
+  const rel = calc.scenarioRelay(cw, cl, cc), agg = calc.scenarioAggregate(n, cw, cl, cc);
+  const max = Math.max(rel.flat, rel.hierarchy, agg.flat, agg.hierarchy, 1);
+  const col = (r) => (r.hierarchy > r.flat ? "var(--bad)" : "var(--good)");
+  $("l-out").innerHTML =
+    `<strong>${tr("l.relay")}</strong><div class="bars">${bar(tr("l.flat"), rel.flat, max, "var(--neutral)", fmt(rel.flat))}${bar(tr("l.hier"), rel.hierarchy, max, col(rel), `${fmt(rel.hierarchy)} · ${rel.ratio.toFixed(2)}×`)}</div>` +
+    `<div style="height:10px"></div><strong>${tr("l.agg")}</strong><div class="bars">${bar(tr("l.flat"), agg.flat, max, "var(--neutral)", fmt(agg.flat))}${bar(tr("l.hier"), agg.hierarchy, max, col(agg), `${fmt(agg.hierarchy)} · ${agg.ratio.toFixed(2)}×`)}</div>`;
+
+  // span
+  const sn = Math.max(2, Math.round(num("s-n"))), cap = Math.max(2, Math.round(num("s-cap")));
+  const sp = calc.optimalSpan(sn, num("s-c0"), Math.max(num("s-m"), 1), null, cap, true);
+  $("s-out-best").textContent = sp.best.k;
+  $("s-out-closed").textContent = sp.closed_form_k.toFixed(1);
+  $("s-note").textContent = tr("s.note", sp.best);
+
+  // reset
+  const r = calc.resetDecision(num("r-c"), num("r-base"), p, { handover: num("r-handover"), wakesPerDay: num("r-wakes"),
+    horizonDays: num("r-days"), cacheHit: Math.min(num("r-cache"), 1) });
+  $("r-out-be").textContent = tr("r.be", r.breakeven_wakes);
+  $("r-out-net").textContent = usd(r.net_saving_usd);
+  $("r-out-net").className = `big ${r.net_saving_usd >= 0 ? "good" : "bad"}`;
+  $("r-note").textContent = tr("r.note", r.expected_wakes);
+
+  $("foot").innerHTML = tr("foot", p.checked || "");
+}
+
+document.querySelectorAll("input, select").forEach((el) => el.addEventListener("input", render));
+$("lang-en").addEventListener("click", () => { lang = "en"; localStorageSet("bto-lang", lang); render(); });
+$("lang-zh").addEventListener("click", () => { lang = "zh-TW"; localStorageSet("bto-lang", lang); render(); });
+render();
+</script>
+</body>
+</html>

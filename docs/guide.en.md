@@ -4,7 +4,7 @@
 
 In a multi-bot system, cost is roughly "wake-ups × calls per wake-up × context C". The most effective fixes reduce wake-ups and shrink C. Shortening the messages themselves helps very little.
 
-Every formula and number here is computed by the tested scripts in `core/` and can be reproduced with `python3 core/orgopt.py`. Platform limits and prices in the examples are Grok Bot's; substitute your own for other bot platforms.
+Every formula and number here is computed by the tested scripts in `core/` and can be reproduced with the `bto` command (`pip install` this repo, or run `python3 core/cli.py`). Platform limits and prices in the examples are Grok Bot's; substitute your own for other bot platforms.
 
 ## Summary
 
@@ -21,12 +21,13 @@ The five things to do first:
 Every call to a bot re-reads its entire context C, so cost is the product of wake-ups, calls per wake-up, and C.
 
 ```math
-\text{cost} \approx \sum_{\text{bot}} W \times R \times C \times p, \qquad p = h \cdot r + (1 - h)
+\text{cost} \approx \sum_{\text{bot}} \Big( W \times R \times C \times p \;+\; W \times O \times o \Big), \qquad p = h \cdot r + (1 - h)
 ```
 
 - W: wake-ups per day; R: calls per wake-up (1 + tool-call rounds for the bot's own work)
 - C: current context size. It keeps growing with every message received, everything read in, and the bot's own output, until the bot hands over to a fresh context
 - p: price factor. h is the cache hit rate, r is the cached price as a fraction of the full price
+- O: output written per wake-up, including reasoning (thinking) tokens; o: output price as a multiple of the input price. Reasoning models can spend more on O than you expect, and every extra call adds more
 - Once the prompt reaches 200K, the whole request is billed at the long-context price, i.e. double
 
 | Price (grok-4.7, per million tokens) | input | cached input | output |
@@ -34,7 +35,7 @@ Every call to a bot re-reads its entire context C, so cost is the product of wak
 | prompt under 200K | $2.00 | $0.50 | $6.00 |
 | prompt 200K or more | $4.00 | $1.00 | $12.00 |
 
-Source: [mem0 Grok API pricing summary](https://mem0.ai/library/llms-and-models/xai-grok-api-pricing) (checked 2026-10). Price presets live in `pricing/` and can be updated anytime. If your platform is subscription-based, dollar figures are cost equivalents for comparing options.
+Source: [mem0 Grok API pricing summary](https://mem0.ai/library/llms-and-models/xai-grok-api-pricing) (checked 2026-10). Presets for eight models (xAI, OpenAI, Anthropic, Google) live in `core/pricing/`; list them with `bto presets` and pick one with `--pricing`. Vendors differ in where the long-context tier starts and how steep it is (Grok 2× at 200K, OpenAI 2× input and 1.5× output above 272K, Claude Haiku 5× above 100K, none for several others). If your platform is subscription-based, dollar figures are cost equivalents for comparing options.
 
 Three consequences follow directly:
 
@@ -66,7 +67,7 @@ When the receiver fetches the board with a tool call, every notification costs o
 The multiplier does not depend on message length, only on how much work the bot does per wake-up. A board is valuable for collaboration and persistence, not for saving tokens.
 
 ```bash
-python3 core/orgopt.py board --k 1 --mode sequential
+bto board --k 1 --mode sequential
 ```
 
 ### Is a leader worth it?
@@ -83,8 +84,8 @@ Assume worker, leader and chief contexts of 30K, 60K and 100K:
 A relay leader nearly doubles the cost. A summarizing leader moves wake-ups from the expensive chief to the cheaper leader, and the chief only receives one summary, so every later chief wake-up is cheaper too.
 
 ```bash
-python3 core/orgopt.py scenario relay
-python3 core/orgopt.py scenario aggregate --n 6
+bto scenario relay
+bto scenario aggregate --n 6
 ```
 
 ### How many bots per manager?
@@ -103,10 +104,10 @@ k^{*} \approx 1 + \sqrt{1 + \frac{2 C_0}{m}}
 
 ![Shorter reports let each manager handle more bots](images/span-of-control.en.svg)
 
-The numerical optimum is computed for 2,000 workers with no cap. The shorter the reports, the more bots one manager can handle and the flatter the organization. Platforms add hard limits, e.g. a Grok Bot group holds at most 6 bots (`adapters/grok-bot/platform.json`).
+The numerical optimum is computed for 2,000 workers with no cap. The shorter the reports, the more bots one manager can handle and the flatter the organization. Platforms add hard limits, e.g. a Grok Bot group holds at most 6 bots (`--platform grok-bot`).
 
 ```bash
-python3 core/orgopt.py --platform adapters/grok-bot/platform.json span --n 12 --c0 30000 --m 1000
+bto span --n 12 --c0 30000 --m 1000 --platform grok-bot
 ```
 
 ### When to hand over to a fresh context
@@ -132,7 +133,7 @@ For one bot whose context grows 15K a day with 10 wake-ups a day, never resettin
 In token terms, a reset pays for itself within two or three wake-ups. The real constraints are the knowledge lost in the hand-over and the manual effort of resetting, so in practice reset on a schedule: hand over before C reaches your quality soft cap or three quarters of the 200K tier. The scripts compute a suggested interval from the measured growth rate.
 
 ```bash
-python3 core/orgopt.py reset --c 150000 --c-base 8000 --wakes-per-day 10
+bto reset --c 150000 --c-base 8000 --wakes-per-day 10
 ```
 
 ## Choosing an architecture
@@ -168,24 +169,41 @@ Eight anti-patterns account for most of the waste, and each can be fixed directl
 | Never resetting | C keeps growing; slower and pricier over time | Every wake-up costs more; past 200K the unit price doubles | Scheduled hand-overs to a fresh chat |
 | Micromanaging chief | The chief has the largest share of cost | Largest C times most wake-ups | Subordinates send summaries; the chief handles exceptions only |
 
-The sample team in `samples/` shows the effect of fixing them:
+The sample team in `samples/` shows the effect of fixing them (`bto compare samples/org_before.txt samples/org_after.txt`):
 
-![Sample redesign: 7-day cost $256 to $25](images/before-after.en.svg)
+![Simulated redesign: 7-day cost $257 to $25](images/before-after.en.svg)
+
+These are simulated numbers for example data, not a measured bill. The [advisor demo](advisor-demo.en.md) walks through a full consultation.
+
+A long hand-off chain is also a latency problem: every hop is another round of waiting. `bto org` reports the longest chain and flags it at 5 hops or more.
 
 Two formats you can adopt as-is:
 
 - Hand-off notification: file path + one-line summary + what the receiver should do + which section to read. E.g. "board#42 v7 | API spec final | please implement /auth, only section 3 needed".
 - Hand-over summary before a reset: goal, decisions made, open items, where the key files are. Keep it within about 3K tokens.
 
+### Before a hand-over: what could be lost
+
+The reset formula only counts tokens. Before you move a bot to a fresh chat, check what the summary must carry, because anything left out is gone:
+
+- [ ] Decisions already made, and why (so the new chat does not reopen them)
+- [ ] Constraints and preferences the user stated along the way
+- [ ] Open items, owners and deadlines
+- [ ] Where the files, boards and links are
+- [ ] Mistakes already tried and rejected
+- [ ] Anything another bot expects this bot to remember
+
+If a bot's value lies mainly in long, unwritten memory (for example a customer history), hand over less often, or move that memory into a file first.
+
 ## Measuring and calibrating
 
 A usage CSV gives the model real parameters. Only when the model reproduces your actual cost within ±15% should you use it to predict the effect of a redesign.
 
 1. Export a usage CSV from your bot platform, ideally covering at least 3 days and all bots.
-2. Run `core/analyze_usage.py`: it maps columns automatically and computes per-bot wake-ups, calls per wake-up, current C, daily growth and cache hit rate.
+2. Run `bto analyze usage.csv --platform grok-bot --org-out org.json`: it maps columns automatically and computes, per context, wake-ups, calls per wake-up, current C, daily growth and cache hit rate.
 3. Check the "model calibration" error in the report. Above ±15%, use only the measured findings; the usual causes are an unsuitable wake-up gap or non-linear growth.
-4. Add who talks to whom to the generated org.json and run `core/orgopt.py org` for a diagnosis.
-5. Write redesign options and compare total cost with `core/orgopt.py compare`.
+4. Add who talks to whom (edit org.json, or describe the team in org.txt / with `bto init`) and run `bto org` for a diagnosis.
+5. Write redesign options and compare total cost with `bto compare`.
 6. Export another CSV a week after the changes to confirm the effect.
 
 Detection rules (all heuristics; check them against the actual conversations):
@@ -199,7 +217,28 @@ Detection rules (all heuristics; check them against the actual conversations):
 | Low cache hit rate | Below 50% (at least 10 calls) | Editing early context, long gaps between wake-ups |
 | Cost hotspot | 30% or more of total cost and above 1.5 / number of bots | Micromanaging chief, too many wake-ups |
 
-Wake-ups are estimated by treating consecutive calls from the same bot within 120 seconds as one wake-up; adjust with `--gap`.
+Wake-ups are estimated by treating consecutive calls of the same context within 120 seconds as one wake-up; adjust with `--gap`.
+
+Three details make the measurements trustworthy:
+
+- **Every chat is its own context.** A bot running several chats or threads keeps a separate context in each, so the analyzer reports `bot/chat` rows when the CSV has a chat column. Mixing them would blur both size and growth.
+- **Hand-overs you already made are detected.** A wake-up whose context is below 60% of the previous one (and at least 5K smaller) starts a new segment. Growth is measured within segments, so a sawtooth does not look like a slow, flat line.
+- **Output is priced too.** Calibration compares the model's input + output cost with the actual spend (the CSV's cost column when present).
+
+### Describing your team
+
+The CSV cannot show who woke whom, so the links come from you. The shortest way is `org.txt`, one line per bot, link or group:
+
+```text
+settings horizon=7 soft_cap=120k
+bot chief      100k base=8k wakes=3 rounds=1
+bot researcher 30k  rounds=3 board
+chief -> researcher : 6/day 800
+researcher -> chief : 6/day 15
+group team : chief researcher : 10/day 300 wake=all
+```
+
+Bot options: `base` (setup kept after a reset), `wakes` (wake-ups not caused by other bots), `rounds` (tool-call rounds of own work), `board` (reads a board after each ping), `out` / `reasoning` (tokens written per wake-up), `cache` (hit rate), `growth` (measured growth per day). Numbers accept `k` and `M`. `bto init` asks the questions for you; `bto convert` switches between org.txt and org.json. Every problem is reported at once, with line numbers.
 
 ## Advisor bot
 
@@ -218,7 +257,9 @@ It follows its own rules: no mental math, no acknowledgement messages, all quest
 The model gives direction and magnitude, not an exact bill. Keep these limits in mind:
 
 - It assumes every call re-reads the full C; platforms that compress context automatically will cost less.
-- Context growth is approximated as linear.
+- Context growth between hand-overs is approximated as linear.
+- Calibration so far is on synthetic data generated from the model's own assumptions, so the small error there proves little. Real exports are the real test.
+- Vendors that charge more for cache writes than for plain input (OpenAI, Anthropic) are modeled at the cache-read price only, which slightly understates cost.
 - Quality is not in the cost formula: attention degrades in long contexts and knowledge is lost in hand-overs; judge those separately.
 - Latency is not modeled: every extra layer adds a round of waiting.
 - The Grok Bot usage CSV column names are not yet verified; check the column mapping and calibration error the first time you use a real export.

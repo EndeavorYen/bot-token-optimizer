@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bot-token-optimizer"
+version = "0.2.0"
+description = "Find where your bots burn tokens (wake-ups, relays, bloated context) and fix how they talk to each other."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [{name = "EndeavorYen"}]
+keywords = ["llm", "bots", "agents", "token", "cost", "multi-agent", "grok"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/EndeavorYen/bot-token-optimizer"
+
+[project.scripts]
+bto = "bto.cli:main"
+
+[tool.setuptools]
+packages = ["bto"]
+package-dir = {"bto" = "core"}
+
+[tool.setuptools.package-data]
+bto = ["pricing/*.json", "platforms/*.json"]

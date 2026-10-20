@@ -4,7 +4,7 @@
 
 Set up a "Token Advisor" inside Grok Bot and call it when usage spikes or before you change how your bots divide work.
 
-## Platform limits (platform.json)
+## Platform limits (`--platform grok-bot`)
 
 - A group holds at most 6 bots, so the span limit is 6.
 - Users cannot rewrite a bot's context. The levers available are: communication channel (one-to-one or group), writing data to files with code, fewer wake-ups, and handing over to a fresh chat.
@@ -23,7 +23,7 @@ Set up a "Token Advisor" inside Grok Bot and call it when usage spikes or before
 The analyzer recognizes common column names (timestamp, bot_name, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, cost_usd, …). The column names in Grok Bot's export have not been verified yet; if they do not match, use `--map`:
 
 ```bash
-python3 core/analyze_usage.py usage.csv --platform adapters/grok-bot/platform.json \
+python3 core/cli.py analyze usage.csv --platform grok-bot \
   --map time=<time column> --map bot=<bot column> --map input=<input-token column>
 ```
 

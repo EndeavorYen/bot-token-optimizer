@@ -7,17 +7,30 @@
 </p>
 
 <p align="center">
-  <img alt="Python 3, standard library only" src="https://img.shields.io/badge/python-3.9%2B%20%C2%B7%20stdlib%20only-3776AB">
-  <img alt="32 tests" src="https://img.shields.io/badge/tests-32%20passing-2E86AB">
-  <img alt="First platform: Grok Bot" src="https://img.shields.io/badge/first%20platform-Grok%20Bot-111827">
+  <a href="https://github.com/EndeavorYen/bot-token-optimizer/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/EndeavorYen/bot-token-optimizer/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Python 3.9+, standard library only" src="https://img.shields.io/badge/python-3.9%2B%20%C2%B7%20stdlib%20only-3776AB">
+  <a href="https://endeavoryen.github.io/bot-token-optimizer/calculator/"><img alt="Web calculator" src="https://img.shields.io/badge/try%20it-web%20calculator-2E86AB"></a>
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-F2A541">
 </p>
 
-**Your bot usage is climbing and you don't know why?** Most of it is not the work itself. It is bots waking each other up, forwarding messages, and re-reading a context that never stops growing. This repo shows you where the tokens go, and how to rewire your bots so they stop burning them.
+**Your bot usage keeps climbing and you don't know why?** Most of it is not the work itself. It is bots waking each other up, forwarding messages, and re-reading a context that never stops growing. This repo shows you where the tokens go, and how to rewire your bots so they stop burning them.
 
-- 📊 **Analyze** a usage CSV: per-bot wake-ups, context growth, wasted wake-ups, and when you will hit the long-context price tier.
-- 🧮 **Model** your bot team: compare redesigns before you touch anything, with formulas that are tested, not guessed.
+- 📊 **Analyze** a usage CSV: wake-ups, context growth and wasted calls per bot and per chat, and when you will hit the long-context price tier.
+- 🧮 **Model** your bot team: describe it in a few lines, compare redesigns before you touch anything.
 - 🤖 **Ask an advisor bot**: drop in a CSV when costs spike and get the three changes that save the most.
+- 🌐 **Try the [web calculator](https://endeavoryen.github.io/bot-token-optimizer/calculator/)**: no install, same formulas.
+
+## Is this for you?
+
+You will probably find savings if two or more of these sound familiar:
+
+- [ ] Usage grows week over week even though the workload is about the same.
+- [ ] Your bots reply "OK", "got it" or "thanks" to each other.
+- [ ] A bot's job is mostly passing messages from one bot to another.
+- [ ] Bots "write it to the board, then ping" instead of sending the content.
+- [ ] Some bots have been running in the same chat for weeks.
+- [ ] A group chat where every bot posts progress updates.
+- [ ] One manager bot reads everyone's full reports.
 
 ---
 
@@ -26,7 +39,7 @@
 A bot is persistent. **Every time it wakes up, it re-reads its entire context**, so the bill follows one rule:
 
 ```
-cost ≈ wake-ups × calls per wake-up × context size
+cost ≈ wake-ups × calls per wake-up × context size   (+ the output it writes)
 ```
 
 Shorter messages barely matter, because a message is tiny next to the context it triggers a re-read of. Two things matter: **how often bots wake each other up**, and **how big each bot's context has grown**. Both are decided by how your bots are organized and how they talk.
@@ -70,56 +83,78 @@ Each report wakes the manager and stays in its context. The optimal number of bo
 ## What fixing it looks like
 
 <p align="center">
-  <img src="docs/images/before-after.en.svg" alt="Sample redesign: 7-day cost $256 to $25" width="100%">
+  <img src="docs/images/before-after.en.svg" alt="Simulated redesign: 7-day cost $257 to $25" width="100%">
 </p>
 
-The sample team in [`samples/`](samples/) had a relay leader, "OK" replies, board round-trips, a noisy group chat and contexts that were never reset. Fixing those five things takes the modeled weekly cost from **$256 to $25 (0.10×)**. Run it yourself:
+The sample team in [`samples/`](samples/) had a relay leader, "OK" replies, board round-trips, a noisy group chat and contexts that were never reset. Fixing those five things takes the **simulated** weekly cost from **$257 to $25 (0.10×)**. This is a model result on example data, not a measured bill; see the [advisor demo](docs/advisor-demo.en.md) for a full consultation, and run it yourself:
 
 ```bash
-python3 core/orgopt.py compare samples/org_before.json samples/org_after.json
+bto compare samples/org_before.txt samples/org_after.txt
 ```
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    A[Usage CSV<br/>exported from your bot platform] --> B[analyze_usage.py<br/>wake-ups, context growth,<br/>waste patterns]
+    A[Usage CSV<br/>exported from your bot platform] --> B[bto analyze<br/>per-chat contexts, growth,<br/>hand-overs, waste patterns]
     B --> C{Model error<br/>within ±15%?}
-    C -- yes --> D[org.json<br/>add who talks to whom]
+    C -- yes --> D[org.txt<br/>add who talks to whom]
     C -- no --> E[Use measured findings only]
-    D --> F[orgopt.py org<br/>diagnosis + savings]
-    F --> G[orgopt.py compare<br/>before vs. redesign]
+    D --> F[bto org<br/>diagnosis + savings]
+    F --> G[bto compare<br/>before vs. redesign]
     G --> H[Apply changes,<br/>re-export a week later]
 ```
 
-The analyzer calibrates the model against your real data first. If the model reproduces your actual spend within ±15%, its predictions for a redesign are worth trusting.
+The analyzer treats **every chat as its own context**, spots **hand-overs you already made** (sudden drops in context) so they do not distort growth, and prices **output and reasoning tokens** as well as input. It then calibrates the model against your real spend: if the model reproduces it within ±15%, its predictions for a redesign are worth trusting.
 
 ## Quick start
 
-No dependencies, just Python 3.
-
 ```bash
-git clone https://github.com/EndeavorYen/bot-token-optimizer
-cd bot-token-optimizer
-python3 -m unittest discover -s tests          # 32 tests
-
-# Where are my tokens going?
-python3 core/analyze_usage.py usage.csv --platform adapters/grok-bot/platform.json --org-out org.json
-
-# Diagnose the team (fill in "links": who sends what to whom)
-python3 core/orgopt.py --platform adapters/grok-bot/platform.json org org.json
-
-# Quick answers
-python3 core/orgopt.py board --k 1                      # is "write to board, then ping" worth it?
-python3 core/orgopt.py span --n 12 --c0 30000 --m 1000  # how many bots per manager?
-python3 core/orgopt.py reset --c 150000 --c-base 8000   # time to hand over to a fresh chat?
+pip install git+https://github.com/EndeavorYen/bot-token-optimizer
+bto --help
 ```
 
-Column names are auto-detected (`timestamp`, `bot_name`, `input_tokens`, `cached_input_tokens`, `output_tokens`, …). If yours differ: `--map time=Date --map bot=Agent --map input=Prompt`.
+No dependencies. Or clone the repo and use `python3 core/cli.py` in place of `bto`.
+
+```bash
+# Where are my tokens going?
+bto analyze usage.csv --platform grok-bot --org-out org.json
+
+# Describe your team by answering a few questions (writes org.txt and org.json)
+bto init
+
+# Diagnose the team and compare a redesign
+bto org org.txt --platform grok-bot
+bto compare org.txt org_redesign.txt
+
+# Quick answers
+bto board --k 1                        # is "write to board, then ping" worth it?
+bto span --n 12 --c0 30000 --m 1000    # how many bots per manager?
+bto reset --c 150000 --c-base 8000     # time to hand over to a fresh chat?
+```
+
+Reports come in English or 繁體中文: `--lang en|zh-TW` (default: `BTO_LANG`, then your system locale).
+
+A team fits in a few lines of `org.txt`:
+
+```text
+settings horizon=7 soft_cap=120k
+bot chief      100k base=8k wakes=3 rounds=1
+bot researcher 30k  rounds=3 board
+bot writer     30k  rounds=2
+chief -> researcher : 6/day 800
+researcher -> writer : 6/day 1.5k
+writer -> researcher : 6/day 15        # "got it" replies
+group team : chief researcher writer : 10/day 900
+```
+
+Mistakes are reported with the line number, and every problem at once (unknown bot names, typos in field names, negative numbers).
+
+CSV columns are auto-detected (`timestamp`, `bot_name`, `chat_id`, `input_tokens`, `cached_input_tokens`, `output_tokens`, `reasoning_tokens`, `cost_usd`, …). If yours differ: `--map time=Date --map bot=Agent --map input=Prompt`.
 
 ## Advisor bot
 
-Turn this repo into an on-demand advisor inside your bot platform. Call it when usage spikes or before a reorg; it collects what it needs in one round of questions and answers with numbers produced only by the tested scripts.
+Turn this repo into an on-demand advisor inside your bot platform. Call it when usage spikes or before a reorg; it asks what it needs in one round of questions and answers with numbers produced only by the tested scripts. See a [full sample consultation](docs/advisor-demo.en.md).
 
 | Call it when… | It will… |
 | --- | --- |
@@ -129,37 +164,65 @@ Turn this repo into an on-demand advisor inside your bot platform. Call it when 
 
 Setup for Grok Bot: [`adapters/grok-bot/`](adapters/grok-bot/README.md).
 
+## Pricing and platform presets
+
+`bto presets` lists them. Prices were checked on 2026-10-20 from each vendor's official pricing page; verify before you rely on them.
+
+| Preset | Input / cached / output per 1M tokens | Long-context tier |
+| --- | --- | --- |
+| `grok-4.7` (default) | $2.00 / $0.50 / $6.00 | ≥ 200K: 2× |
+| `gpt-6.1-sol` | $2.00 / $0.10 / $10.00 | > 272K: 2× input, 1.5× output |
+| `gpt-6-luna` | $0.10 / $0.01 / $0.50 | > 272K: 2× input, 1.5× output |
+| `claude-opus-5-5` | $4.00 / $0.20 / $20.00 | none |
+| `claude-sonnet-5-5` | $2.00 / $0.10 / $10.00 | none |
+| `claude-haiku-5-5` | $0.10 / $0.01 / $0.50 | > 100K: 5× |
+| `gemini-4-argon` | $2.00 / $0.10 / $10.00 | none (prices double from 2026-12-01) |
+| `gemini-3.8-flash` | $0.75 / $0.075 / $3.75 | none (prices double from 2027-01-01) |
+
+Platforms: `grok-bot` (group limit 6) and `generic` (span limit 8). Use `--pricing <preset>` to pair any platform with any model.
+
+## FAQ
+
+**Doesn't prompt caching make this moot?** No. Caching lowers the price of each re-read (to 5–25% of input, depending on the vendor), but the number of re-reads is still wake-ups × context size, and many vendors charge more once the prompt crosses a long-context threshold. The model includes your cache hit rate.
+
+**My platform summarizes or trims context automatically.** Then real growth is slower than the model assumes. The analyzer measures growth from your data, so calibration will show it; the advice about wake-ups and relays still applies.
+
+**My platform is a subscription, not per-token.** Dollar figures then mean "cost equivalent". They still rank the options correctly, and token volume usually drives your rate limits or quota.
+
+**Is this about agents in general?** It is aimed at **persistent bots**: long-running, woken repeatedly, with context that accumulates. One-shot agent runs that finish and disappear do not hit these costs.
+
+**How accurate is it?** It gives direction and magnitude. On the synthetic sample the model reproduces actual spend within about 2%, but that data follows the model's own assumptions; run `bto analyze` on your data and check the calibration error.
+
+**Is my CSV sent anywhere?** No. Everything runs locally, with no network calls.
+
 ## Repository layout
 
 ```
-core/orgopt.py            cost model: board / scenario / span / reset / org / compare / cost
-core/analyze_usage.py     usage CSV analyzer and model calibration
-pricing/                  price presets (grok-4.7)
-adapters/grok-bot/        platform limits + advisor bot instructions (EN / 中文)
+core/                     the bto package: cost model, CSV analyzer, org.txt parser, CLI
+core/pricing/             pricing presets (8 models)
+core/platforms/           platform presets (grok-bot, generic)
+adapters/grok-bot/        advisor bot setup and instructions (EN / 中文)
 docs/guide.en.md          full guide: model, formulas, decision flow, anti-patterns
+docs/advisor-demo.en.md   a sample consultation with real outputs
+docs/calculator/          the web calculator (GitHub Pages), checked against the Python model
 docs/images/              figures, generated from the model by make_figures.py
-samples/                  example teams (before / after) and a synthetic usage CSV
-tests/                    32 tests
+samples/                  example teams, a demo team and a synthetic usage CSV
+tests/                    unit tests, plus the calculator parity check
 ```
 
-## Other bot platforms
+## Contributing
 
-The model is platform-agnostic; Grok Bot is the first adapter. To add yours, create `adapters/<platform>/platform.json`:
-
-```json
-{"name": "My Bot Platform", "pricing": "../../pricing/<preset>.json", "span_cap": 8}
-```
-
-Add a pricing preset if needed and adapt the advisor instructions to your platform's limits. PRs welcome.
+The most useful contribution is real data: the column names of your platform's usage export, and the calibration error you get. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Limits
 
-The model gives direction and magnitude, not an exact bill. It assumes every call re-reads the full context, treats context growth as linear, and does not price in the quality loss of long contexts or hand-overs. The Grok Bot CSV column names have not yet been verified against a real export. Details in the [guide](docs/guide.en.md#limits-and-references).
+The model gives direction and magnitude, not an exact bill. It assumes every call re-reads the full context and treats growth between hand-overs as linear. It does not price in the quality loss of long contexts or hand-overs, or cache-write premiums on vendors that charge them. Calibration so far is on synthetic data, and the Grok Bot CSV column names have not been verified against a real export. Details in the [guide](docs/guide.en.md#limits-and-references).
 
 ## Learn more
 
 - 📘 [Full guide (English)](docs/guide.en.md) · [完整指引（中文）](docs/guide.zh-TW.md)
-- Regenerate the figures: `python3 docs/images/make_figures.py`
+- 🤖 [Advisor demo (English)](docs/advisor-demo.en.md) · [顧問示範（中文）](docs/advisor-demo.zh-TW.md)
+- 🌐 [Web calculator](https://endeavoryen.github.io/bot-token-optimizer/calculator/)
 
 ## License
 

@@ -219,10 +219,10 @@ def fig_before_after(lang, nums):
     nums["before_after"] = {"before_usd": round(tb, 2), "after_usd": round(ta, 2), "ratio": round(res["ratio"], 2),
                             "per_bot_before": {k: round(v, 2) for k, v in b.items()},
                             "per_bot_after": {k: round(v, 2) for k, v in a.items()}}
-    t = {"en": (f"Sample redesign: 7-day cost ${tb:.0f} → ${ta:.0f} ({res['ratio']:.2f}×)",
+    t = {"en": (f"Simulated redesign: 7-day cost ${tb:.0f} → ${ta:.0f} ({res['ratio']:.2f}×)",
                 "Removed a relay leader · banned “OK” replies · content in messages, not board round-trips · slim group chat · fresh contexts",
                 "Before", "After", "removed"),
-         "zh-TW": (f"範例改組：7 天成本 ${tb:.0f} → ${ta:.0f}（{res['ratio']:.2f} 倍）",
+         "zh-TW": (f"模擬改組：7 天成本 ${tb:.0f} → ${ta:.0f}（{res['ratio']:.2f} 倍）",
                    "拿掉轉話 leader · 禁止「OK」回覆 · 內容直接放訊息，不再來回讀 board · 精簡群組 · 重建上下文",
                    "改組前", "改組後", "已移除")}[lang]
     order = sorted(b, key=lambda k: -b[k])

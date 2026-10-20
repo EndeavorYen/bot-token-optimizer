@@ -1,0 +1,15 @@
+# The same team after the advisor's top three changes:
+# 1. no "OK" replies, 2. content in the message instead of board round-trips,
+# 3. hand over chief, researcher and support/a to fresh chats; the group gets one-line status only.
+settings horizon=7 soft_cap=120k
+bot chief      19k  base=8k wakes=2 rounds=1
+bot researcher 15k  base=6k rounds=2
+bot writer     25k  base=6k rounds=1
+bot reviewer   20k  base=5k rounds=0
+bot support/a  15k  base=6k wakes=6 rounds=0
+bot support/b  21k  base=6k wakes=6 rounds=0
+chief -> researcher : 6/day 800
+researcher -> writer : 6/day 1.5k
+writer -> reviewer : 4/day 1.5k
+reviewer -> chief : 4/day 600
+group team : chief researcher writer reviewer : 12/day 60

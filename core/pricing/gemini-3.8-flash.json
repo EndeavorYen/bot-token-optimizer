@@ -1,0 +1,15 @@
+{
+  "vendor": "google",
+  "model": "gemini-3.8-flash",
+  "checked": "2026-10-20",
+  "source": "https://ai.google.dev/gemini-api/docs/pricing",
+  "note": "Prices double from 2027-01-01 ($1.50 / $0.15 / $7.50). Output includes thinking tokens. Explicit cache storage is billed per hour and not modeled.",
+  "currency": "USD",
+  "per_million": {
+    "input": 0.75,
+    "cached_input": 0.075,
+    "output": 3.75
+  },
+  "long_context_threshold": null,
+  "long_context_per_million": null
+}

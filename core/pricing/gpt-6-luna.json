@@ -1,0 +1,20 @@
+{
+  "vendor": "openai",
+  "model": "gpt-6-luna",
+  "checked": "2026-10-20",
+  "source": "https://developers.openai.com/api/docs/pricing",
+  "note": "OpenAI small model. Same 272K whole-request rule. Cache writes cost more than plain input on this platform; the model prices cached tokens at the read price only, so costs are slightly understated.",
+  "currency": "USD",
+  "per_million": {
+    "input": 0.1,
+    "cached_input": 0.01,
+    "output": 0.5,
+    "cache_write": 0.125
+  },
+  "long_context_threshold": 272000,
+  "long_context_per_million": {
+    "input": 0.2,
+    "cached_input": 0.02,
+    "output": 0.75
+  }
+}

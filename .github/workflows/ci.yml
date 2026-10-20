@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Install and smoke-test the bto command
+        run: |
+          pip install .
+          bto --version
+          bto org samples/org_before.txt --platform grok-bot --lang en
+          bto analyze samples/sample_usage.csv --lang zh-TW > /dev/null
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Figures match the model
+        run: |
+          python docs/images/make_figures.py > /dev/null
+          git diff --exit-code docs/images || (echo "Figures are stale: run python docs/images/make_figures.py" && exit 1)
+      - name: Calculator presets match core/pricing
+        run: |
+          python docs/calculator/build_presets.py
+          git diff --exit-code docs/calculator/presets.js || (echo "Run python docs/calculator/build_presets.py" && exit 1)
+      - name: Web calculator matches the Python model
+        run: node tests/calculator_parity.mjs
