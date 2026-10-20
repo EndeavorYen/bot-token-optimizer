@@ -7,6 +7,7 @@
 </p>
 
 <p align="center">
+  <a href="pyproject.toml"><img alt="Version" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FEndeavorYen%2Fbot-token-optimizer%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version&color=5B6C8F"></a>
   <a href="https://github.com/EndeavorYen/bot-token-optimizer/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/EndeavorYen/bot-token-optimizer/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Python 3.9+, standard library only" src="https://img.shields.io/badge/python-3.9%2B%20%C2%B7%20stdlib%20only-3776AB">
   <img alt="8 pricing presets" src="https://img.shields.io/badge/presets-xAI%20%C2%B7%20OpenAI%20%C2%B7%20Anthropic%20%C2%B7%20Google-0F8B8D">
@@ -32,13 +33,29 @@
 
 ## Quick start
 
-Two steps: create the Token Advisor in Grok Bot, then tell it your goal. It looks up everything else itself.
+Two steps and about ten minutes: create the Token Advisor in Grok Bot, then tell it your goal. It looks up everything else itself.
 
-### Step 1. Create the Token Advisor (pick one)
+### Step 1 · Create the Token Advisor
 
-**A. From the shared template (fastest).** Open the Token Advisor template <!-- template-link -->(link coming soon) and create a bot from it. Then tell your main bot: *"Give Token Advisor read-only access to every bot's settings, and keep it out of all groups, schedules and automations."* Templates do not always carry that access.
+Pick one of three ways:
 
-**B. Ask your main bot** (Grok Bot's usual way). Open a **new chat** with the main bot, so this setup is not re-read on its every future wake-up, and paste:
+| | Way | Good for |
+| :---: | --- | --- |
+| **A** | [From the shared template](#a-from-the-shared-template) | the fastest start |
+| **B** | [Ask your main bot](#b-ask-your-main-bot) | the usual way on Grok Bot |
+| **C** | [Set it up from the repo](#c-set-it-up-from-the-repo) | full control |
+
+#### A. From the shared template
+
+1. Open the Token Advisor template <!-- template-link -->(link coming soon) and create a bot from it.
+2. Templates do not always carry access to your other bots, so tell your main bot:
+
+   > Give Token Advisor read-only access to every bot's settings, and keep it out of all groups, schedules and automations.
+
+#### B. Ask your main bot
+
+1. Open a **new chat** with your main bot, so this setup is not re-read on its every later wake-up.
+2. Paste:
 
 ```text
 Please create a new bot with exactly this specification. Do not add, drop or "improve" anything:
@@ -53,24 +70,46 @@ Please create a new bot with exactly this specification. Do not add, drop or "im
 When done, report only: (a) its name, (b) the first line of its instructions, (c) the last "## " heading in them, (d) the output of python3 core/cli.py --version in its workspace, (e) whether it can read the other bots' settings.
 ```
 
-**C. Set it up yourself from the repo.**
+#### C. Set it up from the repo
+
 1. Create a bot named "Token Advisor".
-2. Paste the whole of [`ADVISOR_BOT.en.md`](adapters/grok-bot/ADVISOR_BOT.en.md) as its instructions ([`ADVISOR_BOT.zh-TW.md`](adapters/grok-bot/ADVISOR_BOT.zh-TW.md) for Chinese), unchanged.
-3. Put this repo in its workspace (`git clone https://github.com/EndeavorYen/bot-token-optimizer`) and allow it to run `python3`.
+2. Paste the whole of [`ADVISOR_BOT.en.md`](adapters/grok-bot/ADVISOR_BOT.en.md) as its instructions, unchanged ([`ADVISOR_BOT.zh-TW.md`](adapters/grok-bot/ADVISOR_BOT.zh-TW.md) for Chinese).
+3. Clone this repo into its workspace and allow it to run `python3`.
 4. Give it read-only access to the other bots' settings.
 5. Keep it out of groups, schedules and automations.
 
-**Check, whichever way you chose:** the instructions start with `# Token Cost Advisor (Grok Bot) — playbook` and end with the `## Ground rules` section, `python3 core/cli.py --version` prints `bto 0.6.0` or newer, and it can read the other bots. If something is off, or you want an acceptance test with known answers, see the [step-by-step guide](adapters/grok-bot/SETUP.en.md).
+#### Check that it works
 
-### Step 2. Tell it your goal
+Whichever way you chose, confirm three things:
 
-Open a new chat with the Token Advisor, attach your Grok Bot usage export (the usage-events CSV), and send one sentence, for example:
+- [ ] Its instructions start with `# Token Cost Advisor (Grok Bot) — playbook` and end with the `## Ground rules` section.
+- [ ] `python3 core/cli.py --version` in its workspace prints the same version as the badge at the top of this page.
+- [ ] It can read the other bots' settings.
+
+Something off, or want a trial run with known answers? See the [step-by-step guide](adapters/grok-bot/SETUP.en.md).
+
+<br>
+
+### Step 2 · Tell it your goal
+
+1. Open a new chat with the Token Advisor.
+2. Attach your Grok Bot usage export (the usage-events CSV).
+3. Send one sentence, for example:
 
 ```text
 I want 100% of the quota to last the full 7 days. Also, can the organization be leaner? Tell me who is redundant, which bots should be merged or split, and give me the best org chart.
 ```
 
-It reads your bots' schedules, instructions and groups itself, then replies with the bottom line in dollars per week, the bot that costs most, concrete changes with their savings, how many days the quota will last, the current and proposed org charts, and one change request for your main bot. Nothing changes until you say "send it". More things to ask it: [everyday use](adapters/grok-bot/SETUP.en.md#step-5-everyday-use).
+It reads your bots' schedules, instructions and groups itself, then replies with:
+
+- the bottom line in dollars per week, and the bot that costs most;
+- concrete changes with their savings, and how many days the quota will last;
+- the current and proposed org charts;
+- one change request for your main bot. Nothing changes until you say "send it".
+
+More things to ask it: [everyday use](adapters/grok-bot/SETUP.en.md#step-5-everyday-use).
+
+<br>
 
 ### Prefer the command line?
 
@@ -80,7 +119,7 @@ bto report usage.csv --platform grok-bot --tz +08:00 --quota-days 3 --out memo.m
 bto redesign org.txt --keep chief
 ```
 
-No dependencies; or clone the repo and run `python3 core/cli.py` in place of `bto`. Every command is in the [command reference](#command-reference).
+No dependencies. Every command is in the [command reference](#command-reference).
 
 ## Contents
 

@@ -386,7 +386,11 @@ class TestSetupGuide(unittest.TestCase):
             playbook = self._read(f"ADVISOR_BOT.{lang}.md").splitlines()
             self.assertIn(playbook[0], text, readme)
             self.assertIn([ln for ln in playbook if ln.startswith("## ")][-1], text, readme)
-            self.assertIn(f"bto {version}", text, readme)
+            # no version is written out by hand (it would go stale); the badge reads pyproject.toml
+            self.assertIn("pyproject.toml&query=%24.project.version", text, readme)
+            self.assertNotIn(f"bto {version}", text, readme)
+        for guide in ("SETUP.en.md", "SETUP.zh-TW.md"):
+            self.assertIsNone(__import__("re").search(r"bto \d+\.\d+\.\d+", self._read(guide)), guide)
 
     def test_acceptance_answer(self):
         csv_path = make_grok_export.generate(os.path.join(tempfile.mkdtemp(), "g.csv"))
@@ -408,7 +412,7 @@ class TestSetupGuide(unittest.TestCase):
         self.assertEqual((round(q["days_after_low"], 1), round(q["days_after_high"], 1)), (5.5, 12.0))
         for guide in ("SETUP.en.md", "SETUP.zh-TW.md"):
             g = self._read(guide)
-            for needle in ("$158", "$68", "64%", "$41–59", "$72–119", "5.5", "bto 0.6.0", "grok_schedules.txt"):
+            for needle in ("$158", "$68", "64%", "$41–59", "$72–119", "5.5", "grok_schedules.txt"):
                 self.assertIn(needle, g, (guide, needle))
         for playbook in ("ADVISOR_BOT.en.md", "ADVISOR_BOT.zh-TW.md"):
             g = self._read(playbook)

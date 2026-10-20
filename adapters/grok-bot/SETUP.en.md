@@ -53,7 +53,7 @@ A correct report looks like this:
 | (a) Name | Token Advisor |
 | (b) First line | `# Token Cost Advisor (Grok Bot) — playbook` |
 | (c) Last heading | `## Ground rules` |
-| (d) Version | `bto 0.6.0` (or newer) |
+| (d) Version | `bto` and the same version as the badge at the top of the [README](../../README.md) |
 | (e) Reads other bots | yes |
 
 **If something does not match, paste this to the main bot:**
