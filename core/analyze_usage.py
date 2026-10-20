@@ -222,6 +222,13 @@ def miss_premium(r, pricing):
     return (r["input"] - min(r["cached"], r["input"])) * (table["input"] - table["cached_input"]) / 1e6
 
 
+def wake_growth(wake):
+    """Tokens a wake-up adds to its context: what the calls after the first one read on top of it, plus
+    the last answer. Robust when several chats share a bucket, because it never compares two wake-ups."""
+    last = wake[-1]
+    return max(0.0, last["input"] + last["output"] + last.get("reasoning", 0.0) - wake[0]["input"])
+
+
 def sessionize(rows, gap_seconds):
     """Consecutive calls of one context no more than `gap` apart form one wake-up."""
     wakes, cur = [], []
@@ -241,6 +248,20 @@ def split_resets(days, ctx):
             if ctx[i] < RESET_DROP * ctx[i - 1] and ctx[i - 1] - ctx[i] >= RESET_MIN]
     bounds = [0] + cuts + [len(ctx)]
     return [(bounds[j], bounds[j + 1]) for j in range(len(bounds) - 1)]
+
+
+def growth_per_day(days, ctx):
+    """Context growth per day between hand-overs: a line per segment, weighted by segment length.
+    Returns (growth, segments)."""
+    segments = []
+    for a, b in split_resets(days, ctx):
+        slope, icpt = _fit(days[a:b], ctx[a:b])
+        segments.append({"start": days[a], "end": days[b - 1] if b - 1 > a else days[a],
+                         "n": b - a, "slope": slope, "c0": max(icpt + slope * days[a], 0.0) if b - a >= 3 else ctx[a]})
+    fitted = [s for s in segments if s["n"] >= 3 and s["end"] > s["start"]]
+    weight = sum(s["end"] - s["start"] for s in fitted)
+    growth = sum(s["slope"] * (s["end"] - s["start"]) for s in fitted) / weight if weight else 0.0
+    return growth, segments
 
 
 def assign_units(rows):
@@ -278,14 +299,7 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
                 r["wake_start"] = j == 0
         ctx = [w[0]["input"] for w in wakes]
         days = [(w[0]["time"] - t0).total_seconds() / 86400 for w in wakes]
-        segments = []
-        for a, b in split_resets(days, ctx):
-            slope, icpt = _fit(days[a:b], ctx[a:b])
-            segments.append({"start": days[a], "end": days[b - 1] if b - 1 > a else days[a],
-                             "n": b - a, "slope": slope, "c0": max(icpt + slope * days[a], 0.0) if b - a >= 3 else ctx[a]})
-        fitted = [s for s in segments if s["n"] >= 3 and s["end"] > s["start"]]
-        weight = sum(s["end"] - s["start"] for s in fitted)
-        growth = sum(s["slope"] * (s["end"] - s["start"]) for s in fitted) / weight if weight else 0.0
+        growth, segments = growth_per_day(days, ctx)
         last = ctx[split_resets(days, ctx)[-1][0]:]
         c_now = statistics.median(last[-max(3, len(last) // 5):])
         inp = sum(r["input"] for r in rs)
@@ -299,6 +313,7 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
         flat = dict(pricing, long_context_threshold=None)
         long_extra = sum(cost1(r) - orgopt.call_cost_usd(r["input"], r["cached"], r["output"], flat) for r in long_calls)
 
+        growth_wake = statistics.mean(wake_growth(w) for w in wakes)
         parts = [cost_parts(r, pricing) for r in rs]
         unc_usd, cached_usd, out_usd, premium = (sum(p[i] for p in parts) for i in range(4))
         bounds = split_resets(days, ctx)
@@ -329,7 +344,7 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
             "C_p10": percentile(ctx, 0.1), "C_p50": percentile(ctx, 0.5), "C_p90": percentile(ctx, 0.9),
             "C_peak": statistics.median(peaks) if peaks else max(ctx),
             "C_floor": statistics.median(floors) if floors else min(ctx),
-            "sawtooth": sawtooth,
+            "sawtooth": sawtooth, "growth_per_wake": growth_wake,
         })
     for u in units:
         u["share"] = u["usd"] / total_usd if total_usd else 0.0

@@ -70,8 +70,11 @@ class TestGrokExportMemo(unittest.TestCase):
     def test_plan(self):
         pl = self.rep["plan"]
         codes = [a["code"] for a in pl["actions"]]
-        self.assertEqual(codes[0], "handover")                 # biggest $ × confidence ÷ effort
         self.assertIn("ack", codes)
+        # a mixed bucket fills many chats at once: the hand-over lever is either taken or reported as
+        # blocked, never dropped
+        hv = pl["handover"]
+        self.assertTrue("handover" in codes or hv["blocked"])
         # a bucket that mixes bots is the next analysis step, not a generic action handed to the client
         self.assertNotIn("hotspot", codes)
         self.assertEqual(pl["analysis_next"]["kind"], "split_bucket")
@@ -91,14 +94,41 @@ class TestGrokExportMemo(unittest.TestCase):
             self.assertGreaterEqual(a["usd_week_high"], advise.MIN_SHARE * pl["usd_per_week"])
 
     def test_handover_uses_reset_model(self):
-        a = next(a for a in self.rep["plan"]["actions"] if a["code"] == "handover")
-        u = self.res["units"][0]
-        avg_new = (advise.FRESH_BASE + orgopt.DEFAULT_HANDOVER + 60000) / 2
-        wpd = u["wakes_per_day"] * (1 - u["short_wakes"] / u["wakes"])   # after removing acknowledgements
-        r = orgopt.reset_decision(u["C_p50"], avg_new - orgopt.DEFAULT_HANDOVER, orgopt.DEFAULT_HANDOVER,
-                                  wpd, 7, u["rounds_per_wake"], u["cache_hit"], PRICING)
-        self.assertAlmostEqual(a["per_unit"][0]["usd_week"], r["net_saving_usd"])
-        self.assertEqual(a["confidence"], "medium" if self.rep["plan"]["calibration_ok"] else "low")
+        """Each context's saving = re-reads saved over the week minus one rebuild per hand-over."""
+        hv = self.rep["plan"]["handover"]
+        p = (hv["picks"] + hv["blocked"])[0]
+        e = p["entity"]
+        fresh = advise.FRESH_BASE + orgopt.DEFAULT_HANDOVER
+        wpd = e["wakes_per_day"] * (1 - e["short_wakes"] / e["wakes"])   # after removing acknowledgements
+        r = orgopt.reset_decision(e["C_p50"], (fresh + p["at"]) / 2 - orgopt.DEFAULT_HANDOVER,
+                                  orgopt.DEFAULT_HANDOVER, wpd, 7, e["rounds_per_wake"], e["cache_hit"], PRICING)
+        n = max(1.0, e["growth_week"] / (p["at"] - fresh))
+        self.assertAlmostEqual(p["handovers_week"], n)
+        net = orgopt.to_usd(r["saving_per_wake_eq"] * r["expected_wakes"] - n * r["rebuild_cost_eq"], PRICING)
+        self.assertAlmostEqual(p["usd_week"], net)
+        if hv["blocked"]:
+            self.assertIn(p["name"], advise.memo_md(self.rep, "en").split("## Decisions")[1])
+
+    def test_threshold_sweep(self):
+        hv = self.rep["plan"]["handover"]
+        ats = [row["at"] for row in hv["sweep"]]
+        self.assertEqual(ats, sorted(ats))
+        # a lower threshold always means more hand-overs
+        counts = [row["handovers_week"] for row in hv["sweep"]]
+        self.assertEqual(counts, sorted(counts, reverse=True))
+        for p in hv["picks"]:
+            self.assertLessEqual(p["handovers_week"], hv["max_per_week"])
+        # a tighter weekly limit never removes the lever silently: it moves thresholds up or reports
+        # the context as blocked, with what it would save
+        tight = advise.plan(self.res, self.rep["trend"], self.rep["gaps"], PRICING, max_handovers_week=1.5)
+        th = tight["handover"]
+        for p in th["picks"]:
+            self.assertLessEqual(p["handovers_week"], 1.5)
+        names = {p["name"] for p in th["picks"]} | {b["name"] for b in th["blocked"]}
+        self.assertEqual(names, {p["name"] for p in hv["picks"]} | {b["name"] for b in hv["blocked"]})
+        if th["blocked"]:
+            rep = dict(self.rep, plan=tight)
+            self.assertIn("hand-overs a week", advise.memo_md(rep, "en"))
 
     def test_memo_sections_both_languages(self):
         en = advise.memo_md(self.rep, "en")
@@ -201,10 +231,14 @@ class TestScheduleAttribution(unittest.TestCase):
         ho = next(a for a in pl["actions"] if a["code"] == "handover")
         mon = next(p for p in ho["per_unit"] if p["unit"] == "monitor")
         e = next(e for e in pl["entities"] if e["name"] == "monitor")
-        r = orgopt.reset_decision(e["C_p50"], (advise.FRESH_BASE + orgopt.DEFAULT_HANDOVER + 60000) / 2
-                                  - orgopt.DEFAULT_HANDOVER, orgopt.DEFAULT_HANDOVER,
-                                  e["wakes_per_day"] * 30 / 120, 7, e["rounds_per_wake"], e["cache_hit"], PRICING)
-        self.assertAlmostEqual(mon["usd_week"], r["net_saving_usd"])      # priced on the wake-ups left
+        fresh = advise.FRESH_BASE + orgopt.DEFAULT_HANDOVER
+        r = orgopt.reset_decision(e["C_p50"], (fresh + mon["at"]) / 2 - orgopt.DEFAULT_HANDOVER,
+                                  orgopt.DEFAULT_HANDOVER, e["wakes_per_day"] * 30 / 120, 7,
+                                  e["rounds_per_wake"], e["cache_hit"], PRICING)
+        n = max(1.0, e["growth_week"] * 30 / 120 / (mon["at"] - fresh))     # fewer wake-ups fill it slower
+        self.assertAlmostEqual(mon["handovers_week"], n)
+        net = orgopt.to_usd(r["saving_per_wake_eq"] * r["expected_wakes"] - n * r["rebuild_cost_eq"], PRICING)
+        self.assertAlmostEqual(mon["usd_week"], net)                       # priced on the wake-ups left
         self.assertLessEqual(pl["combined_high"], pl["usd_per_week"])
         self.assertEqual(pl["analysis_next"]["kind"], "split_remainder")
 
@@ -346,28 +380,61 @@ class TestSetupGuide(unittest.TestCase):
 
     def test_acceptance_answer(self):
         csv_path = make_grok_export.generate(os.path.join(tempfile.mkdtemp(), "g.csv"))
-        week = advise.report(csv_path, PRICING, tz=advise.parse_tz("+08:00"))["plan"]["usd_per_week"]
-        budget = round(week * 3 / 7)                          # "the quota lasts 3 days, I need 7"
-        rep = advise.report(csv_path, PRICING, goal_usd_week=budget, tz=advise.parse_tz("+08:00"),
+        rep = advise.report(csv_path, PRICING, tz=advise.parse_tz("+08:00"), quota_days=3,
                             schedule_specs=schedules.load(SCHEDULES))
-        pl = rep["plan"]
+        pl, q = rep["plan"], rep["plan"]["quota"]
         bots = {b["name"]: b for b in rep["attribution"]["bots"]}
-        self.assertEqual((round(pl["usd_per_week"]), budget), (158, 68))
+        self.assertEqual((round(pl["usd_per_week"]), round(q["budget_usd_week"])), (158, 68))
         self.assertEqual(round(bots["monitor"]["share"] * 100), 50)
         self.assertEqual(round(bots["monitor"]["stats"]["idle_share"] * 100), 64)
         self.assertEqual(round(bots["monitor"]["stats"]["C_p50"], -4), 110_000)
         first = pl["actions"][0]
         self.assertEqual((first["code"], first["unit"], first["new_interval_min"]), ("frequency", "monitor", 120))
         self.assertEqual((round(first["usd_week_low"]), round(first["usd_week_high"])), (41, 59))
-        self.assertEqual((round(pl["combined_low"]), round(pl["combined_high"])), (78, 131))
+        ho = next(a for a in pl["actions"] if a["code"] == "handover")
+        self.assertEqual({p["unit"]: p["at"] for p in ho["per_unit"]}["monitor"], 40000)
+        self.assertEqual((round(ho["usd_week_low"]), round(ho["usd_week_high"])), (25, 50))
+        self.assertEqual((round(pl["combined_low"]), round(pl["combined_high"])), (72, 120))
+        self.assertEqual((round(q["days_after_low"], 1), round(q["days_after_high"], 1)), (5.5, 12.4))
         for guide in ("SETUP.en.md", "SETUP.zh-TW.md"):
             g = self._read(guide)
-            for needle in ("$158", "$68", "64%", "$41–59", "$78–131", "bto 0.4.0", "grok_schedules.txt"):
+            for needle in ("$158", "$68", "64%", "$41–59", "$72–120", "5.5", "bto 0.5.0", "grok_schedules.txt"):
                 self.assertIn(needle, g, (guide, needle))
         for playbook in ("ADVISOR_BOT.en.md", "ADVISOR_BOT.zh-TW.md"):
             g = self._read(playbook)
-            for needle in ("$158", "$68", "64%", "$41–59", "$31–62", "$78–131", "$70"):
+            for needle in ("$158", "$68", "64%", "$41–59", "$25–50", "$72–120", "5.5", "$70", "bto quota"):
                 self.assertIn(needle, g, (playbook, needle))
+
+
+class TestQuota(unittest.TestCase):
+    def test_math(self):
+        q = advise.quota_math(2536, 3, 7, 560, 630)
+        self.assertAlmostEqual(q["budget_usd_week"], 2536 * 3 / 7)
+        self.assertAlmostEqual(q["quota_usd"], 2536 * 3 / 7)
+        self.assertAlmostEqual(q["days_after_low"], (2536 * 3 / 7) / ((2536 - 560) / 7))
+        self.assertEqual((round(q["days_after_low"], 1), round(q["days_after_high"], 1)), (3.9, 4.0))
+        self.assertTrue(math.isinf(advise.quota_math(100, 3, 7, 100)["days_after_low"]))
+        with self.assertRaises(ValueError):
+            advise.quota_math(100, 0)
+
+    def test_cli(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(cli.main(["quota", "--week-usd", "2536", "--days-now", "3", "--save", "560", "630",
+                                       "--lang", "zh-TW"]), 0)
+        self.assertIn("3.9–4.0 天", buf.getvalue())
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cli.main(["quota", "--week-usd", "2536", "--days-now", "3", "--json"])
+        self.assertAlmostEqual(json.loads(buf.getvalue())["budget_usd_week"], 2536 * 3 / 7)
+
+    def test_report_with_quota(self):
+        csv_path = make_grok_export.generate(os.path.join(tempfile.mkdtemp(), "g.csv"))
+        rep = advise.report(csv_path, PRICING, quota_days=3, target_days=7)
+        md = advise.memo_md(rep, "en")
+        self.assertIn("the quota lasts 3 days", md)
+        self.assertIn("Days the quota lasts", md)
+        self.assertAlmostEqual(rep["plan"]["goal"]["target"], rep["plan"]["usd_per_week"] * 3 / 7)
 
 
 if __name__ == "__main__":

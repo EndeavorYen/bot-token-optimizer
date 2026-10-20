@@ -16,7 +16,7 @@ for lang in ("en", "zh-TW"):
                           "--goal-usd-week", "18", "--lang", lang,
                           "--out", os.path.join(ROOT, "docs", f"sample-memo.{lang}.md")],
                    check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(CLI + ["report", grok, "--platform", "grok-bot", "--tz", "+08:00", "--goal-usd-week", "68",
+    subprocess.run(CLI + ["report", grok, "--platform", "grok-bot", "--tz", "+08:00", "--quota-days", "3",
                           "--schedules", os.path.join(ROOT, "samples", "grok_schedules.txt"), "--lang", lang,
                           "--out", os.path.join(ROOT, "docs", f"sample-memo-grok.{lang}.md")],
                    check=True, stdout=subprocess.DEVNULL)

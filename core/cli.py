@@ -28,7 +28,7 @@ except ImportError:          # run as a plain script
     import orgspec
     import schedules
     from i18n import resolve_lang
-    __version__ = "0.4.0"
+    __version__ = "0.5.0"
 
 
 def _dump(obj):
@@ -77,13 +77,25 @@ def build_parser():
     s = sub.add_parser("report", parents=[common], help="one-page consultant memo from a usage CSV")
     csv_args(s)
     s.add_argument("--goal-usd-week", type=float, help="weekly budget to test the plan against")
-    s.add_argument("--handover-at", type=float, default=60000, help="hand-over threshold to evaluate (tokens)")
+    s.add_argument("--handover-at", type=float, help="fix one hand-over threshold for every context (default: "
+                                                     "pick per context from 40K-150K)")
+    s.add_argument("--max-handovers-week", type=float, default=7, help="at most this many hand-overs a week per context")
+    s.add_argument("--quota-days", type=float, help="the quota currently runs out after this many days")
+    s.add_argument("--target-days", type=float, default=7, help="how many days the quota should last (default 7)")
     s.add_argument("--schedules", help="schedules file (one bot per line: NAME every 30m | at 09:00,18:00 | cron ...) "
                                        "to split buckets into bots")
     s.add_argument("--out", help="also write the memo to this file")
 
     s = sub.add_parser("trend", parents=[common], help="spend per day and what changed")
     csv_args(s)
+
+    s = sub.add_parser("quota", parents=[common], help="how long the quota lasts: budget and days after savings")
+    s.add_argument("--week-usd", type=float, required=True, help="current spend per week")
+    s.add_argument("--days-now", type=float, required=True, help="the quota currently lasts this many days")
+    s.add_argument("--target-days", type=float, default=7)
+    s.add_argument("--save", type=float, nargs="+", default=[], metavar="USD",
+                   help="weekly savings to test: one value, or LOW HIGH")
+    s.add_argument("--json", action="store_true")
 
     s = sub.add_parser("init", parents=[common], help="describe your bots interactively")
     s.add_argument("-o", "--out", default="org", help="output base name (writes <out>.txt and <out>.json)")
@@ -206,7 +218,9 @@ def _run(a, lang, pricing, cap):
         tz = advise.parse_tz(a.tz)
         specs = schedules.load(a.schedules) if getattr(a, "schedules", None) else None
         rep = advise.report(a.csv, pricing, overrides, a.cached_separate, a.gap,
-                            getattr(a, "goal_usd_week", None), tz, getattr(a, "handover_at", 60000), specs, lang)
+                            getattr(a, "goal_usd_week", None), tz, getattr(a, "handover_at", None), specs, lang,
+                            getattr(a, "max_handovers_week", 7), getattr(a, "quota_days", None),
+                            getattr(a, "target_days", 7))
         if a.cmd == "trend":
             _dump(rep["trend"]) if a.json else print(advise.trend_md(rep["trend"], lang))
         else:
@@ -223,6 +237,11 @@ def _run(a, lang, pricing, cap):
                 _dump({k: v for k, v in rep.items() if k != "tz"})
             else:
                 print(text)
+    elif a.cmd == "quota":
+        lo = a.save[0] if a.save else None
+        hi = a.save[-1] if a.save else None
+        q = advise.quota_math(a.week_usd, a.days_now, a.target_days, lo, hi)
+        _dump(q) if a.json else print(advise.quota_md(q, lang))
     elif a.cmd == "init":
         orgspec.run_init(a.out, lang)
     elif a.cmd == "convert":

@@ -6,7 +6,7 @@ This is what working with the advisor bot looks like, end to end, on the most co
 
 ```bash
 python3 samples/make_grok_export.py usage-events.csv
-bto report usage-events.csv --platform grok-bot --tz +08:00 --goal-usd-week 68 \
+bto report usage-events.csv --platform grok-bot --tz +08:00 --quota-days 3 \
     --schedules samples/grok_schedules.txt --out memo.md
 ```
 
@@ -23,20 +23,21 @@ The full memo it produces: [sample-memo-grok.en.md](sample-memo-grok.en.md).
 > | # | Change | Saves / week | How sure |
 > |---|---|---|---|
 > | 1 | **monitor: every 30 min → every 2 h** | $41–59 | measured, high |
-> | 2 | **monitor, digest and your own chats: hand over to a fresh chat at 60K tokens** (today: only the platform's automatic summary) | $31–62 | modeled, medium |
+> | 2 | **Hand over to a fresh chat: monitor and digest at 40K tokens, your own chats at 100K**, each about once a day or less (today: only the platform's automatic summary) | $25–50 | modeled, medium |
 > | 3 | **heartbeat: every 1 h → every 3 h** (65% of its checks are idle) | $2 | measured, high |
 > | 4 | Put short content in the ping instead of "go read the board" | $2–4 | measured, medium |
 >
-> Together about **$78–131 a week**, counting each dollar once. At the low end we would still be about $12 short. The rest sits in your own chats and bot-to-bot pings ($70/week), and I am mapping who pings whom next.
+> Together about **$72–120 a week**, counting each dollar once, so the quota would last about **5.5–12 days**. At the low end that is still short of 7. The rest sits in your own chats and bot-to-bot pings ($70/week), and I am mapping who pings whom next.
 >
 > Change request for the main bot:
 >
 > ```text
 > Please make these changes to my bots and report the result of each one:
 > 1. Change monitor's schedule from "every 30m" to "every 2h"; keep everything else as it is.
-> 2. Add this rule to the instructions of monitor and digest, replacing any existing hand-over or reset rule: "When the current chat's context passes 60,000 tokens, write a hand-over note (goals, decisions made, open items, where the key files are; at most 3,000 tokens), save it, then continue in a new chat that starts from that note."
-> 3. Change heartbeat's schedule from "every 1h" to "every 3h"; keep everything else as it is.
-> 4. Add to every bot's instructions: "When you notify another bot, include the content itself if it is a paragraph or less. For longer content, write it to a file and give the path and the exact section to read."
+> 2. Add this rule to the instructions of monitor and digest, replacing any existing hand-over or reset rule: "When the current chat's context passes 40,000 tokens, write a hand-over note (goals, decisions made, open items, where the key files are; at most 3,000 tokens), save it, then continue in a new chat that starts from that note."
+> 3. Add the same rule, with 100,000 tokens, to the instructions of every bot I chat with directly.
+> 4. Change heartbeat's schedule from "every 1h" to "every 3h"; keep everything else as it is.
+> 5. Add to every bot's instructions: "When you notify another bot, include the content itself if it is a paragraph or less. For longer content, write it to a file and give the path and the exact section to read."
 > Do not change anything else.
 > ```
 >
@@ -46,7 +47,7 @@ The full memo it produces: [sample-memo-grok.en.md](sample-memo-grok.en.md).
 
 **Advisor** *(sends the request to the main bot and relays its report)*:
 
-> Done: all four changes are in place. **Check on 26 October:** weekly spend ≤ $68, cache share ≥ 80%, and the typical context of the default bots ≤ 60K. Export the same seven days again then and I will compare like for like. Meanwhile I will map the unscheduled $70/week. Next time, start a fresh chat with me; it keeps my own costs down.
+> Done: all five changes are in place. **Check on 26 October:** weekly spend ≤ $68, the quota lasting at least 7 days, and cache share ≥ 80%. Export the same seven days again then and I will compare like for like. Meanwhile I will map the unscheduled $70/week. Next time, start a fresh chat with me; it keeps my own costs down.
 
 ---
 

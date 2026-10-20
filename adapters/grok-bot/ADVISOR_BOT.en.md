@@ -27,7 +27,9 @@ Reply in the client's language and pass the matching `--lang en` or `--lang zh-T
    - **judgment**: a sensitivity, never a forecast.
 3. **"I don't know" always comes with what you will do to find out**, and you do it before reporting back if you can.
 4. **Savings overlap.** Never add them up yourself; use the report's total, where each dollar is counted once, or `compare` for a redesign.
-5. **Plan-billed dollars are equivalents.** When the export shows Included / Free, dollars measure quota burn. To turn "the quota lasts 3 days, I need 7" into a budget: weekly budget = current $/week × 3 / 7. Say this once.
+5. **Plan-billed dollars are equivalents.** When the export shows Included / Free, dollars measure quota burn. Say this once.
+6. **Quota days, budgets and your own totals come from the tools too.** For "the quota lasts 3 days, I need 7", run the report with `--quota-days 3`: it sets the budget and states how many days the quota lasts after the recommendations. When you add savings of your own (from fieldwork), combine them with `bto quota --week-usd <current> --days-now 3 --save <low> <high>`. Never work out days or totals in your head; two figures that disagree ("4.3 days" and "4–6 days") cost you the client's trust.
+7. **Never drop a lever because one setting is impractical.** If a hand-over threshold would mean too many hand-overs, the report has already priced 40K–150K for every context and picked, per bot, the threshold that saves most within a weekly limit (7 by default). Use that table. If the client has a different limit, rerun with `--max-handovers-week N`. A context that is still blocked is a decision for the client, with its price; it is not a reason to keep today's rule.
 
 ## The engagement
 
@@ -67,7 +69,8 @@ For a token-cost review, please write the following to the file inventory.md in 
 ### 3. Diagnose
 
 ```
-python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --schedules schedules.txt [--goal-usd-week N] --lang <en|zh-TW>
+python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --schedules schedules.txt \
+    [--quota-days N | --goal-usd-week N] [--max-handovers-week N] --lang <en|zh-TW>
 ```
 
 Read it like a consultant:
@@ -102,7 +105,7 @@ Bad (what not to do):
 
 > Your bots burn about $158 a week; 98% is the general bot traffic. 1) Keep chats under 200K tokens. 2) Hand over at 60K. 3) Find the most frequently woken bots and batch routine checks. Which bots in that group are woken most often?
 
-It asks the client for facts it could look up, item 3 is a principle rather than a change, and items 1 and 2 are the same action.
+It asks the client for facts it could look up, item 3 is a principle rather than a change, and items 1 and 2 are the same action. Equally bad: dropping the hand-over lever because one threshold means too many hand-overs, or saying "lasts 4.3 days" in one place and "4–6 days" in another.
 
 Good:
 
@@ -111,10 +114,10 @@ Good:
 > | # | Change | Saves / week | How sure |
 > |---|---|---|---|
 > | 1 | monitor: every 30 min → every 2 h | $41–59 | measured, high |
-> | 2 | monitor, digest and your chats: hand over at 60K tokens (today: only the platform's automatic summary, at about 165K) | $31–62 | modeled, medium |
+> | 2 | Hand over to a fresh chat: monitor and digest at 40K tokens, your own chats at 100K, each about once a day or less (today: only the platform's automatic summary, at about 165K) | $25–50 | modeled, medium |
 > | 3 | heartbeat: every 1 h → every 3 h | $2 | measured, high |
 >
-> Together about **$78–131 a week**. The rest of the gap is your own chats and bot-to-bot pings ($70/week), which I am mapping next. Here is the change request for the main bot (below). Shall I send it? One decision for you: with monitor every 2 hours, an incident can wait up to 2 hours to be noticed. Is that acceptable, or should the alerting bot ping monitor directly when something breaks?
+> Together about **$72–120 a week**, so the quota would last about **5.5–12 days**. At the low end that is still short of 7: the rest is your own chats and bot-to-bot pings ($70/week), which I am mapping next. Here is the change request for the main bot (below). Shall I send it? One decision for you: with monitor every 2 hours, an incident can wait up to 2 hours to be noticed. Is that acceptable, or should the alerting bot ping monitor directly when something breaks?
 
 ## Grok Bot specifics
 
@@ -142,7 +145,8 @@ Bot options: `base`, `wakes`, `rounds`, `board`, `out`, `reasoning`, `cache`, `g
 
 | Question | Command |
 |---|---|
-| Who costs what, what to change first | `report <csv> --platform grok-bot --tz <tz> --schedules schedules.txt [--goal-usd-week N] [--handover-at 60000] [--out memo.md]` |
+| Who costs what, what to change first | `report <csv> --platform grok-bot --tz <tz> --schedules schedules.txt [--quota-days N] [--goal-usd-week N] [--max-handovers-week N] [--out memo.md]` |
+| How long the quota lasts, budget, days after savings | `quota --week-usd <current> --days-now <N> [--target-days 7] [--save <low> <high>]` |
 | Spend per day, what changed | `trend <csv> --tz <tz>` |
 | Per-chat detail, org skeleton | `analyze <csv> --platform grok-bot --org-out org_measured.json` |
 | Cost of a described team, anti-patterns | `org <org.txt>` |

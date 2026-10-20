@@ -27,7 +27,9 @@
    - **判斷**：敏感度，不是預測。
 3. **說「不知道」時，一定同時說你要怎麼查到**；能查就先查完再回報。
 4. **省量會重疊。** 不要自己相加；用報告給的總數（每一塊錢只算一次），改組方案用 `compare`。
-5. **方案計費的美元是等值。** 匯出顯示 Included／Free 時，美元代表額度消耗。把「額度 3 天就用完、要撐 7 天」換成預算：每週預算 = 目前每週美元 × 3 ÷ 7。說明一次即可。
+5. **方案計費的美元是等值。** 匯出顯示 Included／Free 時，美元代表額度消耗。說明一次即可。
+6. **額度天數、預算和你自己加總的數字，也都要用工具算。** 遇到「額度 3 天用完、要撐 7 天」，報告加上 `--quota-days 3`：它會設定預算，並算出照建議做完額度能撐幾天。你從現場調查另外找到的省量，用 `bto quota --week-usd <目前每週> --days-now 3 --save <低> <高>` 合併計算。絕不心算天數或總數；前後兩個數字對不起來（「4.3 天」和「4–6 天」），客戶就不會再相信你。
+7. **絕不因為某個設定不可行就放棄整個槓桿。** 如果某個交接門檻會換太多次，報告已經替每個上下文試過 4 萬到 15 萬的門檻，並在每週上限（預設 7 次）內替每個 bot 選出最省的門檻，直接用那張表。客戶的上限不同，就用 `--max-handovers-week N` 重跑。仍然卡住的上下文，是要客戶做的決定（附上金額），不是維持現行規則的理由。
 
 ## 諮詢流程
 
@@ -67,7 +69,8 @@ weekly     cron 0 10 * * 1
 ### 3. 診斷
 
 ```
-python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --schedules schedules.txt [--goal-usd-week N] --lang <zh-TW|en>
+python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --schedules schedules.txt \
+    [--quota-days N | --goal-usd-week N] [--max-handovers-week N] --lang <zh-TW|en>
 ```
 
 用顧問的眼光讀：
@@ -102,7 +105,7 @@ python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --sched
 
 > 你的 bot 每週約燒 $158，98% 是一般 bot 的流量。1）不讓對話超過 20 萬 token。2）6 萬 token 就交接。3）找出最常被叫醒的 bot，把例行檢查合併。請問這組裡最常被叫醒的是哪幾個 bot？
 
-它問了自己查得到的事，第 3 項是原則而不是變更，第 1、2 項其實是同一件事。
+它問了自己查得到的事，第 3 項是原則而不是變更，第 1、2 項其實是同一件事。同樣糟糕的還有：因為某個門檻要換太多次就整個放棄交接，或是一處說「撐 4.3 天」、另一處說「撐 4–6 天」。
 
 好的寫法：
 
@@ -111,10 +114,10 @@ python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --sched
 > | # | 變更 | 每週可省 | 把握 |
 > |---|---|---|---|
 > | 1 | monitor：每 30 分鐘 → 每 2 小時 | $41–59 | 實測，高 |
-> | 2 | monitor、digest 和你的對話：6 萬 token 就交接（目前：只靠平台自動摘要，約 16.5 萬才縮短） | $31–62 | 模型，中 |
+> | 2 | 交接到新 chat：monitor 和 digest 到 4 萬 token、你自己的對話到 10 萬，每個每天最多約一次（目前：只靠平台自動摘要，約 16.5 萬才縮短） | $25–50 | 模型，中 |
 > | 3 | heartbeat：每 1 小時 → 每 3 小時 | $2 | 實測，高 |
 >
-> 合計**每週約 $78–131**。剩下的落差在你自己的對話和 bot 之間的通知（每週 $70），我接著拆這一塊。給主 bot 的變更請求附在下面，要我送出嗎？需要你決定一件事：monitor 改成每 2 小時後，事故最晚 2 小時才會被發現。可以接受嗎？還是改成出事時由告警的 bot 直接通知 monitor？
+> 合計**每週約 $72–120**，額度約可撐 **5.5–12 天**。保守估計仍不到 7 天，剩下的在你自己的對話和 bot 之間的通知（每週 $70），我接著拆這一塊。給主 bot 的變更請求附在下面，要我送出嗎？需要你決定一件事：monitor 改成每 2 小時後，事故最晚 2 小時才會被發現。可以接受嗎？還是改成出事時由告警的 bot 直接通知 monitor？
 
 ## Grok Bot 的特性
 
@@ -142,7 +145,8 @@ bot 選項：`base`、`wakes`、`rounds`、`board`、`out`、`reasoning`、`cach
 
 | 問題 | 指令 |
 |---|---|
-| 誰花了多少、先改什麼 | `report <csv> --platform grok-bot --tz <時區> --schedules schedules.txt [--goal-usd-week N] [--handover-at 60000] [--out memo.md]` |
+| 誰花了多少、先改什麼 | `report <csv> --platform grok-bot --tz <時區> --schedules schedules.txt [--quota-days N] [--goal-usd-week N] [--max-handovers-week N] [--out memo.md]` |
+| 額度能撐幾天、預算、省下之後撐幾天 | `quota --week-usd <目前每週> --days-now <N> [--target-days 7] [--save <低> <高>]` |
 | 每日花費、什麼變了 | `trend <csv> --tz <時區>` |
 | 逐 chat 明細、組織骨架 | `analyze <csv> --platform grok-bot --org-out org_measured.json` |
 | 描述好的團隊要花多少、有哪些反模式 | `org <org.txt>` |

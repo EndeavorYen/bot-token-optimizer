@@ -174,7 +174,11 @@ def wake_stats(wakes, pricing, has_cost, span_days):
     inp = sum(r["input"] for r in rows)
     idle = [w for w in wakes if len(w["rows"]) == 1 and w["rows"][0]["output"] <= IDLE_OUTPUT]
     short = [w["rows"][0] for w in wakes if len(w["rows"]) == 1 and w["rows"][0]["output"] <= ACK_OUTPUT]
-    return {"short_wakes": len(short), "short_usd": sum(orgopt.call_cost_usd(r["input"], r["cached"], r["output"], pricing) for r in short),"wakes": n, "usd": usd, "usd_week": usd * 7 / span_days, "per_wake": usd / n,
+    t0 = wakes[0]["start"]
+    series_growth, _ = analyze_usage.growth_per_day([(w["start"] - t0).total_seconds() / 86400 for w in wakes], ctx)
+    return {"growth_per_wake": sum(analyze_usage.wake_growth(w["rows"]) for w in wakes) / n,
+            "series_growth_per_day": max(series_growth, 0.0),
+            "short_wakes": len(short), "short_usd": sum(orgopt.call_cost_usd(r["input"], r["cached"], r["output"], pricing) for r in short),"wakes": n, "usd": usd, "usd_week": usd * 7 / span_days, "per_wake": usd / n,
             "wakes_per_day": n / span_days, "rounds_per_wake": len(rows) / n,
             "C_p50": analyze_usage.percentile(ctx, 0.5), "C_p90": analyze_usage.percentile(ctx, 0.9),
             "cache_hit": sum(r["cached"] for r in rows) / inp if inp else 0.0,
@@ -276,32 +280,127 @@ def _top_units(units, key, n=2):
     return ", ".join(u["unit"] for u in picked) or "-"
 
 
+HANDOVER_THRESHOLDS = (40000, 60000, 80000, 100000, 120000, 150000)
+MAX_HANDOVERS_WEEK = 7      # per context: at most about one hand-over a day unless the client says otherwise
+
+
+def quota_math(week_usd, days_now, target_days=7, save_low=None, save_high=None):
+    """The quota lasts `days_now` days at `week_usd`; what budget makes it last `target_days`, and how long
+    it lasts after saving `save_low`..`save_high` a week. All in the same units as week_usd."""
+    if days_now <= 0 or target_days <= 0:
+        raise ValueError("days must be positive")
+    quota = week_usd * days_now / 7
+    out = {"days_now": days_now, "target_days": target_days, "quota_usd": quota,
+           "budget_usd_week": quota * 7 / target_days, "cut_usd_week": week_usd - quota * 7 / target_days,
+           "cut_share": 1 - days_now / target_days}
+    for key, save in (("low", save_low), ("high", save_high)):
+        if save is not None:
+            left = week_usd - save
+            out[f"days_after_{key}"] = quota / (left / 7) if left > 0 else math.inf
+    return out
+
+
+def quota_md(q, lang="en"):
+    L = [t("q.now", lang, d=q["days_now"], quota=q["quota_usd"]),
+         t("q.budget", lang, target=q["target_days"], budget=q["budget_usd_week"], cut=q["cut_usd_week"], p=q["cut_share"])]
+    if "days_after_low" in q:
+        if abs(q["days_after_low"] - q.get("days_after_high", q["days_after_low"])) < 0.05:
+            L.append(t("q.after1", lang, d=q["days_after_low"]))
+        else:
+            L.append(t("q.after", lang, a=q["days_after_low"], b=q["days_after_high"]))
+    return "\n".join(L)
+
+
+def handover_sweep(ents, pricing, freq_ratio=None, fixed=None, cap=MAX_HANDOVERS_WEEK):
+    """Price hand-over thresholds per context. Returns (sweep rows per threshold, chosen per context)."""
+    freq_ratio = freq_ratio or {}
+    fresh = FRESH_BASE + orgopt.DEFAULT_HANDOVER
+    thresholds = (fixed,) if fixed else HANDOVER_THRESHOLDS
+    options = {}
+    for e in ents:
+        c = e["C_p50"]
+        # price on the wake-ups that remain after the measured fixes (fewer scheduled fires, no
+        # acknowledgement wake-ups), so the savings do not count the same wake-ups twice
+        if e["name"] in freq_ratio:
+            wpd = e["wakes_per_day"] * freq_ratio[e["name"]]
+        else:
+            wpd = e["wakes_per_day"] * (1 - e["short_wakes"] / e["wakes"]) if e["wakes"] else 0.0
+        for at in thresholds:
+            if c <= at or at <= fresh:
+                continue
+            avg_new = (fresh + at) / 2
+            r = orgopt.reset_decision(c, avg_new - orgopt.DEFAULT_HANDOVER, orgopt.DEFAULT_HANDOVER,
+                                      wpd, 7, e["rounds_per_wake"], e["cache_hit"], pricing)
+            # a context grows per wake-up, so a bot that wakes less often also fills up more slowly
+            n = max(1.0, e.get("growth_week", 0.0) * freq_ratio.get(e["name"], 1.0) / (at - fresh))
+            net_eq = r["saving_per_wake_eq"] * r["expected_wakes"] - n * r["rebuild_cost_eq"]
+            options.setdefault(e["name"], []).append(
+                {"name": e["name"], "context": e["unit"], "entity": e, "c": c, "at": at, "avg": avg_new,
+                 "handovers_week": n, "usd_week": orgopt.to_usd(net_eq, pricing)})
+    sweep = []
+    for at in thresholds:
+        rows = [o for opts in options.values() for o in opts if o["at"] == at]
+        if rows:
+            sweep.append({"at": at, "contexts": len(rows), "handovers_week": sum(o["handovers_week"] for o in rows),
+                          "usd_week": sum(max(0.0, o["usd_week"]) for o in rows),
+                          "max_per_context": max(o["handovers_week"] for o in rows)})
+    picks, blocked = [], []
+    for name, opts in options.items():
+        ok = [o for o in opts if o["usd_week"] > 0 and (fixed or o["handovers_week"] <= cap)]
+        if ok:
+            picks.append(max(ok, key=lambda o: o["usd_week"]))
+        elif any(o["usd_week"] > 0 for o in opts):
+            blocked.append(min((o for o in opts if o["usd_week"] > 0), key=lambda o: o["handovers_week"]))
+    picks.sort(key=lambda o: -o["usd_week"])
+    return sweep, picks, blocked
+
+
 def _entities(res, att, lang="en"):
     """The contexts to advise on: each unit, except that a bucket split by schedules is replaced by
     its scheduled bots plus what is left (unscheduled traffic)."""
     touched = set(att["touched_units"]) if att else set()
     keys = ("C_p50", "wakes_per_day", "rounds_per_wake", "cache_hit", "wakes", "usd", "short_wakes")
+
+    def growth_week(within, wpd, series=0.0):
+        # what the wake-ups add themselves, or the measured trend between hand-overs if that is larger
+        # (it also counts incoming messages); a trend is only meaningful for a single chat
+        return max(within * wpd * 7, series * 7)
+
     ents = []
     for u in res["units"]:
         if u["unit"] in touched:
             continue
+        mixed = u.get("from_model")
         ents.append(dict({k: u[k] for k in keys}, name=u["unit"], unit=u["unit"], share=u["share"],
-                         kind="bucket" if u.get("from_model") else "context", sawtooth=u["sawtooth"],
-                         C_floor=u["C_floor"], C_peak=u["C_peak"]))
+                         kind="bucket" if mixed else "context", sawtooth=u["sawtooth"],
+                         C_floor=u["C_floor"], C_peak=u["C_peak"],
+                         growth_week=growth_week(u["growth_per_wake"], u["wakes_per_day"],
+                                                 0.0 if mixed else max(u["C_growth_per_day"], 0.0))))
     for b in (att or {}).get("bots", []):
-        if b["stats"]:
-            ents.append(dict({k: b["stats"][k] for k in keys}, name=b["name"], unit=b["units"][0],
-                             share=b["share"], kind="bot", sawtooth=False, bot=b))
+        st = b["stats"]
+        if st:
+            ents.append(dict({k: st[k] for k in keys}, name=b["name"], unit=b["units"][0], share=b["share"],
+                             kind="bot", sawtooth=False, bot=b,
+                             growth_week=growth_week(st["growth_per_wake"], st["wakes_per_day"],
+                                                     st["series_growth_per_day"])))
     for r in (att or {}).get("remainder", []):
-        ents.append(dict({k: r["stats"][k] for k in keys}, name=t("p.other", lang, unit=r["unit"]),
-                         unit=r["unit"], share=r["share"], kind="remainder", sawtooth=False))
+        st = r["stats"]
+        ents.append(dict({k: st[k] for k in keys}, name=t("p.other", lang, unit=r["unit"]),
+                         unit=r["unit"], share=r["share"], kind="remainder", sawtooth=False,
+                         growth_week=growth_week(st["growth_per_wake"], st["wakes_per_day"])))
     ents.sort(key=lambda e: -e["usd"])
     return ents
 
 
-def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=60000, att=None, lang="en"):
+def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=None, lang="en",
+         max_handovers_week=MAX_HANDOVERS_WEEK, quota_days=None, target_days=7):
     wk = 7 / res["span_days"]
     week_usd = res["total_usd"] * wk
+    quota = None
+    if quota_days:
+        q = quota_math(week_usd, quota_days, target_days)
+        goal_usd_week = q["budget_usd_week"]
+        quota = q
     units = res["units"]
     err = res["calibration"]["error"]
     calib_ok = not math.isnan(err) and abs(err) <= CALIB_OK
@@ -362,53 +461,48 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=60000, att=
     if a:
         a["request"] = t("p.read_first.req", lang)
 
-    # modeled: hand over to a fresh chat whenever the context passes `handover_at`. Under that policy
-    # a context averages about (fresh start + threshold) / 2; the verified reset model prices one
-    # hand-over against a week of cheaper wake-ups. Percentiles of the wake-up context are used, which
-    # stay valid even when several chats are mixed in one bucket.
+    # modeled: hand over to a fresh chat whenever a context passes a threshold T. Under that policy a
+    # context averages about (fresh start + T) / 2, and it needs (growth per week) / (T - fresh start)
+    # hand-overs a week, each costing one rebuild (the verified reset model). Every candidate T is priced
+    # for every context, so an impractical threshold never removes the lever: each context gets the
+    # threshold that saves most within `max_handovers_week`, unless `handover_at` fixes one for all.
     conf = "medium" if calib_ok else "low"
-    fresh = FRESH_BASE + orgopt.DEFAULT_HANDOVER
-    avg_new = (fresh + handover_at) / 2
-    ho = []
-    for e in ents:
-        c = e["C_p50"]
-        if c <= handover_at:
-            continue
-        # price the hand-over on the wake-ups that remain after the measured fixes (fewer scheduled
-        # fires, no acknowledgement wake-ups), so the savings do not count the same wake-ups twice
-        if e["name"] in freq_ratio:
-            wpd = e["wakes_per_day"] * freq_ratio[e["name"]]
-        else:
-            wpd = e["wakes_per_day"] * (1 - e["short_wakes"] / e["wakes"]) if e["wakes"] else 0.0
-        r = orgopt.reset_decision(c, avg_new - orgopt.DEFAULT_HANDOVER, orgopt.DEFAULT_HANDOVER,
-                                  wpd, 7, e["rounds_per_wake"], e["cache_hit"], pricing, lang=lang)
-        if r["net_saving_usd"] > 0:
-            ho.append((e, r))
+    sweep, picks, blocked = handover_sweep(ents, pricing, freq_ratio, handover_at, max_handovers_week)
+    ho = [p for p in picks if p["usd_week"] > 0]
     if ho:
-        ho.sort(key=lambda x: -x[1]["net_saving_usd"])
-        hi = sum(r["net_saving_usd"] for _, r in ho)
-        covered = {e["unit"] for e, _ in ho}
+        hi = sum(p["usd_week"] for p in ho)
+        covered = {p["context"] for p in ho}
         absorbed = [a for a in actions if a["code"] == "long_context" and a["unit"] in covered]
         prem = sum(a["usd_week_low"] for a in absorbed)
-        names = ", ".join(f"{e['name']} ≈ {e['C_p50']:,.0f}" for e, _ in ho[:4]) + ("…" if len(ho) > 4 else "")
-        saw = [e for e, _ in ho if e["sawtooth"]]
+        sep_ = "、" if lang == "zh-TW" else ", "
+        names = sep_.join(t("p.handover.item", lang, name=p["name"], c=f"{p['c']:,.0f}", at=f"{p['at']:,.0f}",
+                             n=p["handovers_week"]) for p in ho[:4]) + ("…" if len(ho) > 4 else "")
+        saw = [p["entity"] for p in ho if p["entity"]["sawtooth"]]
         sawtxt = t("p.handover.saw", lang, floor=f"{saw[0]['C_floor']:,.0f}", peak=f"{saw[0]['C_peak']:,.0f}",
                    unit=saw[0]["name"]) if saw else ""
         if absorbed:
             sawtxt += t("p.handover.absorbed", lang,
                         n=sum(u["long_context_calls"] for u in units if u["unit"] in covered),
                         thr=f"{thr:,.0f}" if thr else "-", usd=prem)
-        a = add("handover", ", ".join(e["name"] for e, _ in ho), max(hi / 2, prem), max(hi, prem), conf, "low",
-                "modeled", units=names, at=f"{handover_at:,.0f}", avg=f"{avg_new:,.0f}", saw=sawtxt)
+        ats = sorted({p["at"] for p in ho})
+        a = add("handover", ", ".join(p["name"] for p in ho), max(hi / 2, prem), max(hi, prem), conf, "low",
+                "modeled", title_key="p.handover" if len(ats) == 1 else "p.handover_multi",
+                units=names, at=f"{ats[0]:,.0f}", saw=sawtxt, n=sum(p["handovers_week"] for p in ho))
         if a:
-            a["per_unit"] = [{"unit": e["name"], "context": e["unit"], "usd_week": r["net_saving_usd"]} for e, r in ho]
-            named = [e["name"] for e, _ in ho if e["kind"] in ("bot", "context")]
-            if any(e["kind"] in ("bucket", "remainder") for e, _ in ho):
-                named.append(t("p.req.others", lang))
-            a["request"] = t("p.handover.req", lang, names="、".join(named) if lang == "zh-TW" else ", ".join(named),
-                             at=f"{handover_at:,.0f}")
+            a["per_unit"] = [{"unit": p["name"], "context": p["context"], "usd_week": p["usd_week"], "at": p["at"],
+                              "handovers_week": p["handovers_week"]} for p in ho]
+            reqs = []
+            for at in ats:
+                group = [p for p in ho if p["at"] == at]
+                named = [p["name"] for p in group if p["entity"]["kind"] in ("bot", "context")]
+                if any(p["entity"]["kind"] in ("bucket", "remainder") for p in group):
+                    named.append(t("p.req.others", lang))
+                reqs.append(t("p.handover.req", lang, names=sep_.join(named), at=f"{at:,.0f}"))
+            a["request"] = reqs
             for x in absorbed:
                 actions.remove(x)
+    plan_handover = {"sweep": sweep, "picks": picks, "blocked": blocked, "max_per_week": max_handovers_week,
+                     "fixed": handover_at}
     # cache misses inside a wake-up cost in proportion to the context, so after the hand-overs and
     # frequency changes only the remaining share of input spend is left to recover
     removed = sum(a["usd_week_high"] for a in actions if a["code"] in ("handover", "frequency"))
@@ -419,7 +513,8 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=60000, att=
 
     for a in actions:
         if a["code"] == "long_context":
-            a["request"] = t("p.handover.req", lang, names=a["unit"], at=f"{handover_at:,.0f}")
+            a["request"] = t("p.handover.req", lang, names=a["unit"],
+                             at=f"{handover_at or max(HANDOVER_THRESHOLDS):,.0f}")
 
     # the biggest remaining driver (bots whose schedule is already being changed are set aside): a named
     # bot gets a judgment-tier action; a bucket that still mixes several bots, or unscheduled traffic,
@@ -473,7 +568,9 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=60000, att=
         conf = "high"
     return {"usd_per_week": week_usd, "actions": actions, "combined_low": lo, "combined_high": hi,
             "goal": goal, "confidence": conf, "confidence_gaps": reasons, "calibration_ok": calib_ok,
-            "handover_at": handover_at, "entities": ents, "analysis_next": analysis_next}
+            "handover_at": handover_at, "handover": plan_handover, "entities": ents,
+            "analysis_next": analysis_next,
+            "quota": dict(quota, **quota_math(week_usd, quota_days, target_days, lo, hi)) if quota else None}
 
 
 def kpis(res, pl, pricing, tz=timezone.utc, lang="en"):
@@ -486,6 +583,10 @@ def kpis(res, pl, pricing, tz=timezone.utc, lang="en"):
     cache = sum(u["cache_hit"] * u["input_tokens"] for u in units) / inp if inp else 0.0
     target_week = pl["goal"]["target"] if pl["goal"] else pl["usd_per_week"] - pl["combined_low"]
     out = [{"name": t("m.k_week", lang), "now": f"${pl['usd_per_week']:,.0f}", "target": f"≤ ${target_week:,.0f}", "check": check}]
+    if pl.get("quota"):
+        q = pl["quota"]
+        out.append({"name": t("m.k_quota", lang), "now": t("m.days", lang, d=q["days_now"]),
+                    "target": "≥ " + t("m.days", lang, d=q["target_days"]), "check": check})
     short = sum(u["short_wakes"] for u in units) / total_wakes
     if short >= 0.05:
         out.append({"name": t("m.k_ack", lang), "now": f"{short:.0%}", "target": "≤ 5%", "check": check})
@@ -501,8 +602,9 @@ def kpis(res, pl, pricing, tz=timezone.utc, lang="en"):
     if units and thr:
         u = units[0]
         ho = next((a for a in pl["actions"] if a["code"] == "handover"), None)
-        if ho and u["unit"] in {p["context"] for p in ho["per_unit"]}:
-            target = pl["handover_at"]
+        ats = [p["at"] for p in (ho or {}).get("per_unit", []) if p["context"] == u["unit"]]
+        if ats:
+            target = max(ats)
         else:
             target = min(thr, 5000 * math.ceil(max(u["C_p90"] * 0.6, 3 * (FRESH_BASE + orgopt.DEFAULT_HANDOVER)) / 5000))
         out.append({"name": t("m.k_ctx", lang, unit=u["unit"]), "now": f"{u['C_p90']:,.0f}",
@@ -512,7 +614,8 @@ def kpis(res, pl, pricing, tz=timezone.utc, lang="en"):
 
 # ---------------------------------------------------------------- report / memo
 def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, goal_usd_week=None,
-           tz=timezone.utc, handover_at=60000, schedule_specs=None, lang="en"):
+           tz=timezone.utc, handover_at=None, schedule_specs=None, lang="en",
+           max_handovers_week=MAX_HANDOVERS_WEEK, quota_days=None, target_days=7):
     """Everything the memo needs. `schedule_specs` (from schedules.load) splits buckets into bots."""
     info = {}
     rows, mapping, skipped = analyze_usage.load_rows(csv_path, overrides, cached_separate, lang, info)
@@ -530,7 +633,7 @@ def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, go
                 g["detail"] += t("g.att", lang, p=att["matched_share"], n=sum(1 for b in att["bots"] if b["stats"]))
                 if att["matched_share"] >= 0.3 and g["severity"] == "high":
                     g["severity"] = "medium"
-    pl = plan(res, tr, gl, pricing, goal_usd_week, handover_at, att, lang)
+    pl = plan(res, tr, gl, pricing, goal_usd_week, handover_at, att, lang, max_handovers_week, quota_days, target_days)
     return {"analysis": res, "trend": tr, "gaps": gl, "plan": pl, "attribution": att,
             "kpis": kpis(res, pl, pricing, tz, lang),
             "pricing": {"model": pricing.get("model", "?"), **pricing["per_million"],
@@ -555,7 +658,9 @@ def memo_md(rep, lang="en"):
     # bottom line
     L += [f"## {t('m.bottom', lang)}", ""]
     eq = t("m.b1_eq", lang) if (rep["analysis"]["load_info"].get("cost_text_rows") or not res.get("has_cost")) else ""
-    L.append("1. " + t("m.b1", lang, wk=pl["usd_per_week"], day=pl["usd_per_week"] / 7, eq=eq))
+    L.append("1. " + t("m.b1", lang, wk=pl["usd_per_week"], day=pl["usd_per_week"] / 7, eq=eq)
+             + (t("m.b1_quota", lang, now=pl["quota"]["days_now"], target=pl["quota"]["target_days"],
+                  budget=pl["quota"]["budget_usd_week"], cut=pl["quota"]["cut_share"]) if pl.get("quota") else ""))
     if units:
         hot = units[0]
         priced = an["uncached_input_usd"] + an["cached_input_usd"] + an["output_usd"]
@@ -580,6 +685,9 @@ def memo_md(rep, lang="en"):
             goal_txt = t("m.goal_gap", lang, goal=g["target"], gap=g["remaining"], cut=g["hotspot_cut"], unit=g["hotspot_unit"])
         else:
             goal_txt = t("m.goal_gap_nounit", lang, goal=g["target"], gap=g["remaining"])
+    if pl.get("quota") and pl["combined_high"] > 0:
+        q = pl["quota"]
+        goal_txt = t("m.quota_after", lang, a=q["days_after_low"], b=q["days_after_high"], target=q["target_days"])
     if pl["combined_high"] > 0:
         w = pl["usd_per_week"] or 1
         L.append("3. " + t("m.b3", lang, lo=pl["combined_low"], hi=pl["combined_high"],
@@ -658,7 +766,19 @@ def memo_md(rep, lang="en"):
         L += ["", f"**{t('m.how', lang)}**", ""]
         for i, a in enumerate(pl["actions"], 1):
             L.append(f"{i}. {a['how']}")
-        reqs = [a["request"] for a in pl["actions"] if a.get("request")]
+        hv = pl.get("handover") or {}
+        if hv.get("sweep"):
+            chosen = {p["at"] for p in hv["picks"] if p["usd_week"] > 0}
+            L += ["", f"### {t('m.ho_title', lang)}", "", t("m.ho_note", lang, cap=hv["max_per_week"]), "",
+                  t("m.ho_header", lang), "|---|---|---|---|---|"]
+            for row in hv["sweep"]:
+                mark = " ✓" if row["at"] in chosen else ""
+                L.append(f"| {row['at']:,.0f}{mark} | {row['contexts']} | {row['handovers_week']:.1f} | "
+                         f"{row['max_per_context']:.1f} | {_usd(row['usd_week'])} |")
+        reqs = []
+        for a in pl["actions"]:
+            r = a.get("request")
+            reqs += r if isinstance(r, list) else ([r] if r else [])
         if reqs:
             L += ["", f"### {t('m.paste', lang)}", "", t("m.paste_note", lang), "", "```text", t("m.paste_intro", lang)]
             L += [f"{i}. {r}" for i, r in enumerate(reqs, 1)]
@@ -684,6 +804,15 @@ def memo_md(rep, lang="en"):
             dec.append(t("m.decide_goal", lang, goal=g["target"], gap=g["remaining"], unit=g["hotspot_unit"], cut=g["hotspot_cut"]))
         else:
             dec.append(t("m.decide_goal_nounit", lang, goal=g["target"], gap=g["remaining"]))
+    hv = pl.get("handover") or {}
+    for b in hv.get("blocked", []):
+        dec.append(t("m.ho_blocked", lang, name=b["name"], cap=hv["max_per_week"], at=f"{b['at']:,.0f}",
+                     n=b["handovers_week"], usd=b["usd_week"])
+                   + (t("m.ho_mixed", lang) if b["entity"]["kind"] in ("bucket", "remainder") else ""))
+    if hv.get("sweep") and not hv.get("blocked") and not any(a["code"] == "handover" for a in pl["actions"]):
+        best = max(hv["sweep"], key=lambda r: r["usd_week"])
+        dec.append(t("m.ho_infeasible", lang, cap=hv["max_per_week"], at=f"{best['at']:,.0f}",
+                     n=best["max_per_context"], usd=best["usd_week"]))
     colon = "：" if zh else ": "
     for gp in rep["gaps"]:
         dec.append(f"{gp['detail']}{'' if zh else ' '}**{t('m.how', lang)}{colon.strip()}**{'' if zh else ' '}{gp['fix']}")
