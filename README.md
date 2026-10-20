@@ -41,16 +41,20 @@ Pick one of three ways:
 
 | | Way | Good for |
 | :---: | --- | --- |
-| **A** | [From the shared template](#a-from-the-shared-template) | the fastest start |
+| **A** | [From the shared template](#a-from-the-shared-template-coming-soon) *(coming soon)* | the fastest start |
 | **B** | [Ask your main bot](#b-ask-your-main-bot) | the usual way on Grok Bot |
 | **C** | [Set it up from the repo](#c-set-it-up-from-the-repo) | full control |
 
-#### A. From the shared template
+#### A. From the shared template (coming soon)
 
-1. Open the Token Advisor template <!-- template-link -->(link coming soon) and create a bot from it.
+> The template is not published yet. Until it is, use **B** or **C**.
+
+1. Open the Token Advisor template <!-- template-link --> and create a bot from it.
 2. Templates do not always carry access to your other bots, so tell your main bot:
 
    > Give Token Advisor read-only access to every bot's settings, and keep it out of all groups, schedules and automations.
+
+It does not matter whether the template brings the repo along: on first use the advisor clones the tools into its workspace itself, and pulls the latest version on every later use.
 
 #### B. Ask your main bot
 
@@ -74,7 +78,7 @@ When done, report only: (a) its name, (b) the first line of its instructions, (c
 
 1. Create a bot named "Token Advisor".
 2. Paste the whole of [`ADVISOR_BOT.en.md`](adapters/grok-bot/ADVISOR_BOT.en.md) as its instructions, unchanged ([`ADVISOR_BOT.zh-TW.md`](adapters/grok-bot/ADVISOR_BOT.zh-TW.md) for Chinese).
-3. Clone this repo into its workspace and allow it to run `python3`.
+3. Allow it to run `python3` and `git` in its workspace (it clones this repo itself on first use; you can also clone it there yourself).
 4. Give it read-only access to the other bots' settings.
 5. Keep it out of groups, schedules and automations.
 
