@@ -135,6 +135,13 @@ M = {
     "u.err_missing": ("Required columns not found: {missing}. CSV columns: {cols}. Use --map, e.g. --map time=Date",
                       "找不到必要欄位 {missing}。CSV 欄位為：{cols}。請用 --map 指定，例如 --map time=日期"),
     "u.err_map": ("--map column {col!r} is not in the CSV; available: {cols}", "--map 指定的欄位 {col!r} 不在 CSV 中；可用欄位：{cols}"),
+    "u.split_input": ("Note: the prompt is split over three columns (cache write, uncached, cache read); input = their sum, cached = Cache Read.",
+                      "注意：prompt 分在三欄（寫入快取、未快取、讀快取）；input 取三欄加總，cached 取 Cache Read。"),
+    "u.cloud_agent": ("excluded {n} rows with a {col} (one-shot cloud runs, not persistent bots)",
+                      "排除 {n} 筆有 {col} 的資料列（一次性的雲端執行，不是常駐 bot）"),
+    "u.cost_text": ("Note: {n} rows have a non-numeric {col!r} (e.g. Included / Free), so cost is priced from tokens with the pricing preset and calibration is against that estimate, not a bill.",
+                    "注意：{n} 筆的 {col!r} 不是數字（例如 Included／Free），成本改用價格設定從 token 推算；校正比的是這個推算值，不是帳單。"),
+    "u.err_num": ("column {col!r} has a non-numeric value {v!r}", "欄位 {col!r} 有非數字的值 {v!r}"),
     "u.err_empty": ("The CSV has no usable rows", "CSV 沒有可用的資料列"),
     "u.err_time": ("cannot parse time: {v!r}", "無法解析時間：{v!r}"),
 

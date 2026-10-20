@@ -20,7 +20,18 @@ Set up a "Token Advisor" inside Grok Bot and call it when usage spikes or before
 
 ## Your first real CSV
 
-The analyzer recognizes common column names (timestamp, bot_name, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, cost_usd, …). The column names in Grok Bot's export have not been verified yet; if they do not match, use `--map`:
+The Grok Bot usage-events export is read without any flags:
+
+```text
+Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
+```
+
+- The prompt is split over three columns, so input = `Input (w/ Cache Write)` + `Input (w/o Cache Write)` + `Cache Read`, and cached = `Cache Read` (input + output equals `Total Tokens`).
+- Rows with a `Cloud Agent ID` are one-shot cloud runs, not persistent bots, and are left out.
+- On plan billing `Cost` holds text such as `Included` or `Free`. The analyzer then prices every call from tokens with the pricing preset, so the calibration compares the model with that estimate, not with a bill.
+- The export has no bot or chat column, so all calls are analyzed as one context. `Model` (e.g. `grok-bot-default`, `grok-bot-automation`) is the model, not the bot; add a bot column yourself before analyzing if you need a per-bot breakdown, and treat the calibration error of a single merged context with care.
+
+For other exports the analyzer recognizes common column names (timestamp, bot_name, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, cost_usd, …); if they do not match, use `--map`:
 
 ```bash
 python3 core/cli.py analyze usage.csv --platform grok-bot \

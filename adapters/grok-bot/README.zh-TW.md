@@ -20,7 +20,18 @@
 
 ## 第一次使用真實 CSV
 
-分析器會自動辨識常見欄名（timestamp、bot_name、input_tokens、cached_input_tokens、output_tokens、reasoning_tokens、cost_usd 等）。Grok Bot 匯出檔的實際欄名尚未驗證，對不上時用 `--map`：
+Grok Bot 的 usage-events 匯出檔不用加任何參數就能讀：
+
+```text
+Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
+```
+
+- prompt 分在三欄，所以 input = `Input (w/ Cache Write)` + `Input (w/o Cache Write)` + `Cache Read`，cached = `Cache Read`（input + output 等於 `Total Tokens`）。
+- 有 `Cloud Agent ID` 的資料列是一次性的雲端執行，不是常駐 bot，會排除。
+- 方案計費時 `Cost` 是 `Included`、`Free` 這類文字。這時分析器改用價格設定從 token 推算每筆成本，所以校正比的是這個推算值，不是帳單。
+- 匯出檔沒有 bot 或 chat 欄位，所有呼叫會合併成一份上下文分析。`Model`（例如 `grok-bot-default`、`grok-bot-automation`）是模型，不是 bot；需要分 bot 時請先自己補一個 bot 欄位，合併成一份上下文時的校正誤差也要保守看待。
+
+其他平台的匯出檔，分析器會自動辨識常見欄名（timestamp、bot_name、input_tokens、cached_input_tokens、output_tokens、reasoning_tokens、cost_usd 等），對不上時用 `--map`：
 
 ```bash
 python3 core/cli.py analyze usage.csv --platform grok-bot \

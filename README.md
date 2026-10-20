@@ -315,7 +315,7 @@ No. Everything runs locally with no network calls, including the web calculator,
 
 ## Limits
 
-The model gives direction and magnitude, not an exact bill. It assumes every call re-reads the full context and treats growth between hand-overs as linear. It does not price the quality loss of long contexts or hand-overs, or cache-write premiums on vendors that charge them. Calibration so far is on synthetic data, and the Grok Bot CSV column names have not been verified against a real export. Details in the [guide](docs/guide.en.md#limits-and-references).
+The model gives direction and magnitude, not an exact bill. It assumes every call re-reads the full context and treats growth between hand-overs as linear. It does not price the quality loss of long contexts or hand-overs, or cache-write premiums on vendors that charge them. Calibration so far is on synthetic data. The Grok Bot usage-events export is read as is, but it has no bot or chat column, so all calls form one context unless you add one. Details in the [guide](docs/guide.en.md#limits-and-references).
 
 ## Repository layout
 
