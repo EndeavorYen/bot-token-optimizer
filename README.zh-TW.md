@@ -186,7 +186,7 @@ flowchart LR
     G --> H[執行改善，<br/>一週後再匯出驗證]
 ```
 
-分析器把**每個 chat 視為獨立的上下文**，會偵測**你已經做過的交接**（上下文突然變小），避免它們扭曲成長速度，而且 **output 與推理 token** 也一起計價。接著它用你的真實花費校正模型；只有在模型能把實際花費重現到 ±15% 以內時，它對改組方案的預測才值得參考。`bto report` 會把這些整理成一頁式備忘錄：以每週美元表示的結論、標明實測／模型／判斷的排序行動、資料缺口與補法，以及有檢查日的 KPI（[範例](docs/sample-memo.zh-TW.md)）。
+分析器把**每個 chat 視為獨立的上下文**，會偵測**你已經做過的交接**（上下文突然變小），避免它們扭曲成長速度，而且 **output 與推理 token** 也一起計價。接著它用你的真實花費校正模型；只有在模型能把實際花費重現到 ±15% 以內時，它對改組方案的預測才值得參考。`bto report` 會把這些整理成一頁式備忘錄：以每週美元表示的結論、標明實測／模型／判斷的排序行動、資料缺口與補法，可直接貼給管理 bot 的那個 bot 的變更請求，以及有檢查日的 KPI（[範例](docs/sample-memo-grok.zh-TW.md)）。匯出檔分不出 bot 時，`--schedules` 會把每個 bot 的排程和喚醒時間對起來，點名是誰。
 
 診斷結果長這樣（節錄）：
 
@@ -220,6 +220,7 @@ bto --help
 | 想做的事 | 指令 |
 | --- | --- |
 | 一頁式備忘錄：錢花在哪、先做什麼 | `bto report usage.csv --platform grok-bot --tz +08:00 --goal-usd-week 300` |
+| 依排程點名分組裡的 bot | `bto report usage.csv --schedules schedules.txt --tz +08:00` |
 | 每日花費與最近的變化 | `bto trend usage.csv --tz +08:00` |
 | 逐上下文明細與組織骨架 | `bto analyze usage.csv --platform grok-bot --org-out org.json` |
 | 用問答描述你的團隊 | `bto init` |
@@ -247,11 +248,11 @@ group team : chief researcher writer : 10/day 900
 
 ## 顧問 bot
 
-把這個 repo 變成 bot 平台裡隨叫隨到的成本顧問。它會界定你的目標、診斷、建議、規劃，並約好怎麼驗證：以每週美元表示的結論、附依據與信心的排序行動、只有你能做的決定，以及有檢查日的 KPI。所有數字都來自經過測試的工具；資料不完美時它仍會回答，並說明把握有多大、怎麼補資料。請看[諮詢範例](docs/advisor-demo.zh-TW.md)。
+把這個 repo 變成 bot 平台裡隨叫隨到的成本顧問。它會界定你的目標，然後自己調查（直接讀各 bot 的排程、指令和群組，而不是反過來問你），診斷後給出具體變更：哪個 bot、哪個設定、從什麼改成什麼、省多少、多有把握，並整理成一則管理 bot 能直接執行的請求；最後列出只有你能做的決定，以及有檢查日的 KPI。所有數字都來自經過測試的工具；資料不完美時它仍會回答，並說明把握有多大、怎麼補資料。請看[諮詢範例](docs/advisor-demo.zh-TW.md)。
 
 | 什麼時候叫它 | 你會得到 |
 | --- | --- |
-| 用量消耗太快 | 三句話的結論、前幾項行動與每週可省金額，以及[一頁式備忘錄](docs/sample-memo.zh-TW.md) |
+| 用量消耗太快 | 它先自己查各 bot 的排程與規則，再給你點名最花錢 bot 的三句話結論、附每週金額的具體變更、給主 bot 的變更請求，以及[一頁式備忘錄](docs/sample-memo-grok.zh-TW.md) |
 | 想要改組 | 1～2 個方案的改前改後比較、取捨，以及與實測花費的對帳 |
 | 想問「如果…會怎樣」 | 先給答案，再給對應工具算出的數字：board、leader、控制幅度、交接 |
 
@@ -323,13 +324,13 @@ Grok Bot 的設定方式：[手把手教學](adapters/grok-bot/SETUP.zh-TW.md)�
 ## Repo 結構
 
 ```
-core/                       bto 套件：成本模型、CSV 分析、建議與備忘錄、org.txt 解析、指令列工具
+core/                       bto 套件：成本模型、CSV 分析、排程比對、建議與備忘錄、org.txt 解析、指令列工具
 core/pricing/               價格設定（8 個模型）
 core/platforms/             平台設定（grok-bot、generic）
 adapters/grok-bot/          手把手建立教學、adapter 說明與顧問工作手冊（中文 / English）
 docs/guide.zh-TW.md         完整指引：模型、公式、架構決策、反模式
 docs/advisor-demo.zh-TW.md  一次諮詢的完整範例（實際輸出）
-docs/sample-memo.zh-TW.md   `bto report` 產出的一頁式備忘錄
+docs/sample-memo*.zh-TW.md  `bto report` 產出的一頁式備忘錄（由 make_memos.py 產生）
 docs/calculator/            網頁計算器（GitHub Pages），與 Python 模型交叉驗證
 docs/images/                圖表，由 make_figures.py 依模型產生
 samples/                    範例團隊、示範團隊、合成的 usage CSV 與 Grok 匯出檔產生器

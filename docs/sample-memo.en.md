@@ -4,7 +4,7 @@
 
 1. At the current pace your bots cost about **$27 per week** (≈ $3.86/day), as a token-priced equivalent.
 2. **32% of it is researcher**, and 96% of all spend is re-reading context rather than writing output.
-3. The recommendations below save about **$7–$14 per week (26%–52%)**, counting each dollar once; your target of $18/week still needs about $2/week more, i.e. about 23% fewer wake-ups of researcher.
+3. The recommendations below save about **$7–$13 per week (25%–49%)**, counting each dollar once; your target of $18/week still needs about $2/week more, i.e. about 27% fewer wake-ups of researcher.
 
 Overall confidence: **high**.
 
@@ -39,7 +39,7 @@ Ranked by dollars × confidence ÷ effort. Savings overlap, so they are not simp
 |---|---|---|---|---|---|---|
 | 1 | **Hand over to a fresh chat whenever a context passes 60,000 tokens** | every wake-up re-reads the whole context (typical: chief ≈ 91,436, support/a ≈ 80,707 tokens); with a 60,000 threshold it would average about 35,500 | $3.36–$6.72 (modeled) | medium | low | _to assign_ |
 | 2 | **Put the content in the notification instead of “go read the board”** | 56 wake-ups (20%) spend a full-context call just to fetch the work; mostly researcher | $1.87–$3.75 (measured) | medium | low | _to assign_ |
-| 3 | **Stop breaking the prompt cache mid-wake-up** | calls after the first one in a wake-up still paid $2.58 for uncached input; mostly researcher, chief | $1.30–$2.61 (measured) | medium | medium | _to assign_ |
+| 3 | **Stop breaking the prompt cache mid-wake-up** | calls after the first one in a wake-up still paid $2.58 for uncached input; mostly researcher, chief | $0.98–$1.96 (measured) | medium | medium | _to assign_ |
 | 4 | **Stop wake-ups that only say “OK”** | 25 wake-ups (9% of all) made a single call with almost no output; mostly writer | $0.46–$0.91 (measured) | medium | low | _to assign_ |
 
 **How**
@@ -49,9 +49,21 @@ Ranked by dollars × confidence ÷ effort. Savings overlap, so they are not simp
 3. Keep fixed instructions first and unchanged; avoid editing or re-ordering earlier messages and tool lists.
 4. Tell bots not to acknowledge; batch notifications; only notify when the receiver must act.
 
+### Paste to the main bot
+
+The changes above as one message for the bot that manages your bots. Review it first; nothing changes until it is sent.
+
+```text
+Please make these changes to my bots and report the result of each one:
+1. Add this rule to the instructions of chief, support/a, replacing any existing hand-over or reset rule: “When the current chat's context passes 60,000 tokens, write a hand-over note (goals, decisions made, open items, where the key files are; at most 3,000 tokens), save it, then continue in a new chat that starts from that note.”
+2. Add to every bot's instructions: “When you notify another bot, include the content itself if it is a paragraph or less. For longer content, write it to a file and give the path and the exact section to read.”
+3. Add to every bot's instructions: “Do not reply ‘OK’ or ‘got it’ to a notification. Send a message only when the receiver has to act.”
+Do not change anything else.
+```
+
 ## Decisions and data needed
 
-- Reaching $18/week needs about $2/week beyond these actions: choose between fewer wake-ups of researcher (about 23% fewer) and a higher budget.
+- Reaching $18/week needs about $2/week beyond these actions: choose between fewer wake-ups of researcher (about 27% fewer) and a higher budget.
 
 ## How we will know it worked
 

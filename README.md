@@ -186,7 +186,7 @@ flowchart LR
     G --> H[Apply, then re-export<br/>a week later]
 ```
 
-The analyzer treats **every chat as its own context**, detects **hand-overs you already made** (sharp drops in context) so they do not distort growth, and prices **output and reasoning tokens** along with input. It then calibrates the model against your real spend; only if the model reproduces it within ±15% are its predictions for a redesign worth trusting. `bto report` turns all of this into a one-page memo: the bottom line in dollars per week, ranked actions labeled measured, modeled or judgment, the data gaps and how to close them, and KPIs with a check date ([example](docs/sample-memo.en.md)).
+The analyzer treats **every chat as its own context**, detects **hand-overs you already made** (sharp drops in context) so they do not distort growth, and prices **output and reasoning tokens** along with input. It then calibrates the model against your real spend; only if the model reproduces it within ±15% are its predictions for a redesign worth trusting. `bto report` turns all of this into a one-page memo: the bottom line in dollars per week, ranked actions labeled measured, modeled or judgment, the data gaps and how to close them, a change request ready to paste to the bot that manages the others, and KPIs with a check date ([example](docs/sample-memo-grok.en.md)). When the export cannot tell bots apart, `--schedules` matches each bot's schedule against the wake-up times to name them.
 
 A diagnosis looks like this (trimmed):
 
@@ -220,6 +220,7 @@ No dependencies. Or clone the repo and run `python3 core/cli.py` in place of `bt
 | Task | Command |
 | --- | --- |
 | One-page memo: where the money goes, what to do first | `bto report usage.csv --platform grok-bot --tz +08:00 --goal-usd-week 300` |
+| Name the bots inside a bucket from their schedules | `bto report usage.csv --schedules schedules.txt --tz +08:00` |
 | Spend per day and what changed | `bto trend usage.csv --tz +08:00` |
 | Per-context detail and an org skeleton | `bto analyze usage.csv --platform grok-bot --org-out org.json` |
 | Describe your team by answering questions | `bto init` |
@@ -247,11 +248,11 @@ Mistakes are reported with their line numbers, all at once. CSV columns are dete
 
 ## Advisor bot
 
-Turn this repo into an on-demand cost consultant inside your bot platform. It frames your goal, diagnoses, recommends, plans and sets up the check: the bottom line in dollars per week, ranked actions with their evidence and confidence, the decisions only you can make, and KPIs with a check date. Every number comes from the tested tools, and it still answers when the data is imperfect, saying how sure it is and how to find out. See a [sample engagement](docs/advisor-demo.en.md).
+Turn this repo into an on-demand cost consultant inside your bot platform. It frames your goal, then investigates on its own (it reads your bots' schedules, instructions and groups instead of asking you), diagnoses, and recommends concrete changes: which bot, which setting, from what to what, how much it saves and how sure it is, written as one request the managing bot can execute. It closes with the decisions only you can make and KPIs with a check date. Every number comes from the tested tools, and it still answers when the data is imperfect, saying how sure it is and how to find out. See a [sample engagement](docs/advisor-demo.en.md).
 
 | Call it when… | You get… |
 | --- | --- |
-| Usage is burning too fast | A three-sentence bottom line, the top actions with $/week, and a [one-page memo](docs/sample-memo.en.md) |
+| Usage is burning too fast | It looks up your bots' schedules and rules itself, then gives a three-sentence bottom line naming the costliest bot, concrete changes with $/week, a change request for the main bot and a [one-page memo](docs/sample-memo-grok.en.md) |
 | You want to reorganize | A before/after comparison of 1–2 options, the trade-offs, and a reconciliation against measured spend |
 | You have a "what if" | The answer first, then the number from the matching tool: board, leader, span, hand-over |
 
@@ -323,13 +324,13 @@ The model gives direction and magnitude, not an exact bill. It assumes every cal
 ## Repository layout
 
 ```
-core/                     the bto package: cost model, CSV analyzer, advice and memo, org.txt parser, CLI
+core/                     the bto package: cost model, CSV analyzer, schedule matching, advice and memo, org.txt parser, CLI
 core/pricing/             pricing presets (8 models)
 core/platforms/           platform presets (grok-bot, generic)
 adapters/grok-bot/        step-by-step setup, adapter notes and the consultant playbook (EN / 中文)
 docs/guide.en.md          the full guide: model, formulas, decision flow, anti-patterns
 docs/advisor-demo.en.md   a sample engagement with real outputs
-docs/sample-memo.en.md    the one-page memo `bto report` writes
+docs/sample-memo*.en.md   one-page memos `bto report` writes (make_memos.py regenerates them)
 docs/calculator/          the web calculator (GitHub Pages), checked against the Python model
 docs/images/              figures, generated from the model by make_figures.py
 samples/                  example teams, a demo team, a synthetic usage CSV and a Grok export generator

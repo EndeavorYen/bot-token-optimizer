@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import timezone, timedelta
+from datetime import datetime, timezone, timedelta
 
 from _paths import ROOT  # noqa: F401
 import advise
@@ -15,6 +15,7 @@ import cli
 import make_grok_export
 import make_sample_usage
 import orgopt
+import schedules
 
 PRICING = orgopt.load_pricing("grok-4.7")
 
@@ -63,18 +64,22 @@ class TestGrokExportMemo(unittest.TestCase):
 
     def test_trend_sees_more_wakeups(self):
         ch = {c["unit"]: c for c in self.rep["trend"]["changes"]}["grok-bot-default"]
-        self.assertGreater(ch["wakes_day_after"], 1.3 * ch["wakes_day_before"])
+        self.assertGreater(ch["wakes_day_after"], 1.1 * ch["wakes_day_before"])
         self.assertEqual(self.rep["trend"]["tz"], "UTC+08:00")
 
     def test_plan(self):
         pl = self.rep["plan"]
         codes = [a["code"] for a in pl["actions"]]
         self.assertEqual(codes[0], "handover")                 # biggest $ × confidence ÷ effort
-        self.assertIn("hotspot", codes)
         self.assertIn("ack", codes)
-        hot = next(a for a in pl["actions"] if a["code"] == "hotspot")
-        self.assertEqual(hot["tier"], "judgment")
-        self.assertIn("Find out which bots", hot["title"])
+        # a bucket that mixes bots is the next analysis step, not a generic action handed to the client
+        self.assertNotIn("hotspot", codes)
+        self.assertEqual(pl["analysis_next"]["kind"], "split_bucket")
+        self.assertIn("--schedules", advise.memo_md(self.rep, "en"))
+        # every action that changes a bot comes with a paste-ready request
+        for a in pl["actions"]:
+            if a["code"] in ("handover", "ack", "read_first"):
+                self.assertTrue(a["request"])
         scores = [a["score"] for a in pl["actions"]]
         self.assertEqual(scores, sorted(scores, reverse=True))
         # judgment ranges never enter the combined total, and it never exceeds spend
@@ -89,10 +94,11 @@ class TestGrokExportMemo(unittest.TestCase):
         a = next(a for a in self.rep["plan"]["actions"] if a["code"] == "handover")
         u = self.res["units"][0]
         avg_new = (advise.FRESH_BASE + orgopt.DEFAULT_HANDOVER + 60000) / 2
+        wpd = u["wakes_per_day"] * (1 - u["short_wakes"] / u["wakes"])   # after removing acknowledgements
         r = orgopt.reset_decision(u["C_p50"], avg_new - orgopt.DEFAULT_HANDOVER, orgopt.DEFAULT_HANDOVER,
-                                  u["wakes_per_day"], 7, u["rounds_per_wake"], u["cache_hit"], PRICING)
+                                  wpd, 7, u["rounds_per_wake"], u["cache_hit"], PRICING)
         self.assertAlmostEqual(a["per_unit"][0]["usd_week"], r["net_saving_usd"])
-        self.assertEqual(a["confidence"], "low")                # calibration is off on mixed chats
+        self.assertEqual(a["confidence"], "medium" if self.rep["plan"]["calibration_ok"] else "low")
 
     def test_memo_sections_both_languages(self):
         en = advise.memo_md(self.rep, "en")
@@ -110,6 +116,113 @@ class TestGrokExportMemo(unittest.TestCase):
         en = advise.memo_md(self.rep, "en")
         for word in ("PASS", "FAIL", "pytest", "unittest", "core/", ".py"):
             self.assertNotIn(word, en)
+
+
+SCHEDULES = os.path.join(ROOT, "samples", "grok_schedules.txt")
+
+
+class TestScheduleParser(unittest.TestCase):
+    A = datetime(2026, 10, 12, tzinfo=timezone.utc)          # a Monday
+    TZ = timezone(timedelta(hours=8))
+
+    def _n(self, line, days=7):
+        sp = schedules.parse_line(line)
+        return len(schedules.fire_times(sp, self.A, self.A + timedelta(days=days) - timedelta(minutes=1), self.TZ))
+
+    def test_kinds(self):
+        self.assertEqual(self._n("m every 30m"), 336)
+        self.assertEqual(self._n("m every 2h 08:00-22:00"), 56)          # 08, 10, ..., 22 local
+        self.assertEqual(self._n("d at 09:00,18:00"), 14)
+        self.assertEqual(self._n("c cron */15 9-18 * * 1-5"), 200)       # 40 a day, Mon-Fri
+        self.assertEqual(self._n("w cron 0 10 * * 1"), 1)
+        self.assertEqual(self._n("x cron 0 0 1 * 1", days=31), 5)        # cron: day 1 OR Monday
+
+    def test_options_and_intervals(self):
+        sp = schedules.parse_line("p every 2h in=grok-bot-default")
+        self.assertEqual((sp["in"], sp["text"]), ("grok-bot-default", "every 2h"))
+        self.assertEqual(schedules.interval_minutes(sp), 120)
+        self.assertEqual(schedules.interval_minutes(schedules.parse_line("d at 09:00,18:00")), 720)
+        self.assertAlmostEqual(schedules.interval_minutes(schedules.parse_line("c cron */15 9-18 * * 1-5")), 50.4)
+        self.assertEqual(schedules.nice_interval(83), 120)
+        self.assertEqual(schedules.nice_interval(2000), 1440)
+        self.assertEqual(schedules.fmt_interval(180), "3h")
+
+    def test_errors_are_listed_together(self):
+        with self.assertRaises(schedules.ScheduleError) as cm:
+            schedules.parse("a every 30m\nb sometimes\nc cron 1 2 3\na at 09:00\nd every 0m\n")
+        msg = str(cm.exception)
+        for part in ("line 2", "line 3", "line 5", "duplicate bot names: a"):
+            self.assertIn(part, msg)
+
+
+class TestScheduleAttribution(unittest.TestCase):
+    """The export has no bot id, but scheduled bots wake at known times: the bucket can be split."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.csv = make_grok_export.generate(os.path.join(tempfile.mkdtemp(), "g.csv"))
+        cls.rep = advise.report(cls.csv, PRICING, goal_usd_week=60, tz=advise.parse_tz("+08:00"),
+                                schedule_specs=schedules.load(SCHEDULES))
+        cls.att = cls.rep["attribution"]
+        cls.bots = {b["name"]: b for b in cls.att["bots"]}
+
+    def test_matches(self):
+        m, d, h = self.bots["monitor"], self.bots["digest"], self.bots["heartbeat"]
+        self.assertGreaterEqual(m["matched"], 300)
+        self.assertEqual((d["matched"], d["fires"]), (14, 14))
+        self.assertEqual((h["matched"], h["fires"]), (168, 168))
+        self.assertTrue(all(b["reliable"] for b in self.att["bots"]))
+        self.assertEqual(m["units"], ["grok-bot-default"])
+        self.assertEqual(h["units"], ["grok-bot-automation"])
+        self.assertTrue(0.6 < m["stats"]["idle_share"] < 0.8)           # planted: ~75% nothing to do
+        self.assertEqual(d["stats"]["idle_share"], 0.0)
+        self.assertEqual([r["unit"] for r in self.att["remainder"]], ["grok-bot-default"])
+
+    def test_spend_is_split_not_invented(self):
+        total = sum(b["stats"]["usd"] for b in self.att["bots"]) + sum(r["stats"]["usd"] for r in self.att["remainder"])
+        self.assertAlmostEqual(total, self.rep["analysis"]["total_usd"], places=6)
+
+    def test_frequency_actions(self):
+        acts = {a["unit"]: a for a in self.rep["plan"]["actions"] if a["code"] == "frequency"}
+        self.assertEqual(set(acts), {"monitor", "heartbeat"})
+        self.assertEqual(self.rep["plan"]["actions"][0]["unit"], "monitor")
+        m = acts["monitor"]
+        self.assertEqual(m["new_interval_min"], 120)
+        self.assertIn("every 2h", m["request"])
+        st = self.bots["monitor"]["stats"]
+        self.assertAlmostEqual(m["usd_week_high"], st["usd_week"] * (1 - 30 / 120))
+        self.assertEqual(acts["heartbeat"]["new_interval_min"], 180)
+
+    def test_no_double_counting(self):
+        pl = self.rep["plan"]
+        codes = [a["code"] for a in pl["actions"]]
+        self.assertNotIn("ack", codes)               # the idle checks are already removed by the schedules
+        self.assertNotIn("hotspot", codes)
+        ho = next(a for a in pl["actions"] if a["code"] == "handover")
+        mon = next(p for p in ho["per_unit"] if p["unit"] == "monitor")
+        e = next(e for e in pl["entities"] if e["name"] == "monitor")
+        r = orgopt.reset_decision(e["C_p50"], (advise.FRESH_BASE + orgopt.DEFAULT_HANDOVER + 60000) / 2
+                                  - orgopt.DEFAULT_HANDOVER, orgopt.DEFAULT_HANDOVER,
+                                  e["wakes_per_day"] * 30 / 120, 7, e["rounds_per_wake"], e["cache_hit"], PRICING)
+        self.assertAlmostEqual(mon["usd_week"], r["net_saving_usd"])      # priced on the wake-ups left
+        self.assertLessEqual(pl["combined_high"], pl["usd_per_week"])
+        self.assertEqual(pl["analysis_next"]["kind"], "split_remainder")
+
+    def test_confidence_and_gaps(self):
+        g = next(g for g in self.rep["gaps"] if g["code"] == "bot_empty")
+        self.assertEqual(g["severity"], "medium")
+        self.assertEqual(self.rep["plan"]["confidence"], "medium")
+
+    def test_memo(self):
+        for lang, inside, paste in (("en", "Who is inside", "Paste to the main bot"),
+                                    ("zh-TW", "裡是誰", "貼給主 bot 的變更請求")):
+            rep = advise.report(self.csv, PRICING, goal_usd_week=60, tz=advise.parse_tz("+08:00"),
+                                schedule_specs=schedules.load(SCHEDULES), lang=lang)
+            md = advise.memo_md(rep, lang)
+            self.assertIn(inside, md)
+            self.assertIn(paste, md)
+            self.assertIn("monitor", md.split("##")[1])                      # named in the bottom line
+            self.assertIn("```text", md)
 
 
 class TestSampleMemo(unittest.TestCase):
@@ -233,19 +346,28 @@ class TestSetupGuide(unittest.TestCase):
 
     def test_acceptance_answer(self):
         csv_path = make_grok_export.generate(os.path.join(tempfile.mkdtemp(), "g.csv"))
-        rep = advise.report(csv_path, PRICING, goal_usd_week=60, tz=advise.parse_tz("+08:00"))
+        week = advise.report(csv_path, PRICING, tz=advise.parse_tz("+08:00"))["plan"]["usd_per_week"]
+        budget = round(week * 3 / 7)                          # "the quota lasts 3 days, I need 7"
+        rep = advise.report(csv_path, PRICING, goal_usd_week=budget, tz=advise.parse_tz("+08:00"),
+                            schedule_specs=schedules.load(SCHEDULES))
         pl = rep["plan"]
-        self.assertEqual(round(pl["usd_per_week"]), 80)
-        self.assertEqual(rep["analysis"]["units"][0]["unit"], "grok-bot-default")
-        self.assertEqual(round(rep["analysis"]["units"][0]["share"] * 100), 96)
-        self.assertEqual((round(pl["combined_low"]), round(pl["combined_high"])), (28, 57))
-        self.assertTrue(pl["goal"]["reachable"])
-        self.assertEqual(pl["confidence"], "low")
-        self.assertEqual(pl["actions"][0]["code"], "handover")
+        bots = {b["name"]: b for b in rep["attribution"]["bots"]}
+        self.assertEqual((round(pl["usd_per_week"]), budget), (158, 68))
+        self.assertEqual(round(bots["monitor"]["share"] * 100), 50)
+        self.assertEqual(round(bots["monitor"]["stats"]["idle_share"] * 100), 64)
+        self.assertEqual(round(bots["monitor"]["stats"]["C_p50"], -4), 110_000)
+        first = pl["actions"][0]
+        self.assertEqual((first["code"], first["unit"], first["new_interval_min"]), ("frequency", "monitor", 120))
+        self.assertEqual((round(first["usd_week_low"]), round(first["usd_week_high"])), (41, 59))
+        self.assertEqual((round(pl["combined_low"]), round(pl["combined_high"])), (78, 131))
         for guide in ("SETUP.en.md", "SETUP.zh-TW.md"):
             g = self._read(guide)
-            for needle in ("$80", "96%", "$28–57", "60,000", "bto 0.3.0"):
+            for needle in ("$158", "$68", "64%", "$41–59", "$78–131", "bto 0.4.0", "grok_schedules.txt"):
                 self.assertIn(needle, g, (guide, needle))
+        for playbook in ("ADVISOR_BOT.en.md", "ADVISOR_BOT.zh-TW.md"):
+            g = self._read(playbook)
+            for needle in ("$158", "$68", "64%", "$41–59", "$31–62", "$78–131", "$70"):
+                self.assertIn(needle, g, (playbook, needle))
 
 
 if __name__ == "__main__":

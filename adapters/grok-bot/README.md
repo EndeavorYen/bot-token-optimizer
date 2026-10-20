@@ -16,10 +16,10 @@ On Grok Bot you usually ask an existing bot to create a new one. **[SETUP.en.md]
 
 In short:
 
-1. In a fresh chat, ask an existing bot to create "Token Advisor": clone this repo into its workspace, set [`ADVISOR_BOT.en.md`](ADVISOR_BOT.en.md) verbatim as its instructions ([`ADVISOR_BOT.zh-TW.md`](ADVISOR_BOT.zh-TW.md) for Chinese), and keep it out of groups, schedules and automations.
+1. In a fresh chat, ask an existing bot to create "Token Advisor": clone this repo into its workspace, set [`ADVISOR_BOT.en.md`](ADVISOR_BOT.en.md) verbatim as its instructions ([`ADVISOR_BOT.zh-TW.md`](ADVISOR_BOT.zh-TW.md) for Chinese), give it read-only access to the other bots' settings, and keep it out of groups, schedules and automations.
 2. Check that its instructions start with `# Token Cost Advisor (Grok Bot) — playbook` and end with the `## Ground rules` section.
-3. Run the acceptance test on the synthetic export; the expected answer is about $80/week, 96% in `grok-bot-default`, with $28–57/week of savings.
-4. Call it only when needed, with a new chat each time, e.g. "usage exploded this week, here is the export, we need to stay under $300 a week". It answers like a consultant: the bottom line in dollars per week, ranked actions with their confidence, a one-page memo and KPIs with a check date ([sample engagement](../../docs/advisor-demo.en.md)).
+3. Run the acceptance test on the synthetic export; the expected answer names **monitor** as half of the $158/week and recommends running it every 2 hours instead of every 30 minutes ($41–59/week), with a change request ready for the main bot.
+4. Call it only when needed, with a new chat each time, e.g. "the quota runs out in 3 days, I need it to last 7; here is the export". It looks up your bots' schedules, instructions and groups itself and asks you only about goals and trade-offs. It answers like a consultant: the bottom line in dollars per week, ranked actions with their confidence, a one-page memo and KPIs with a check date ([sample engagement](../../docs/advisor-demo.en.md)).
 
 ## Your first real CSV
 
@@ -30,15 +30,16 @@ Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Inp
 ```
 
 ```bash
-python3 core/cli.py report usage-events.csv --platform grok-bot --tz +08:00 --goal-usd-week 300 --out memo.md
+python3 core/cli.py report usage-events.csv --platform grok-bot --tz +08:00 --goal-usd-week 300 \
+    --schedules schedules.txt --out memo.md
 ```
 
-To see what the memo looks like before exporting your own data, generate a synthetic export with `python3 samples/make_grok_export.py` and run the same command on it.
+`schedules.txt` lists each bot's schedule (`monitor every 30m`, `digest at 09:00,18:00`, `sync cron */15 9-18 * * 1-5`, optionally `in=grok-bot-default`). Since the export has no bot id, the report matches each schedule against the wake-up times to name the bots inside a model bucket; what is left is your own messages and bot-to-bot pings. To see the result before exporting your own data, run the same command on `python3 samples/make_grok_export.py` with `samples/grok_schedules.txt` ([sample memo](../../docs/sample-memo-grok.en.md)).
 
 - The prompt is split over three columns, so input = `Input (w/ Cache Write)` + `Input (w/o Cache Write)` + `Cache Read`, and cached = `Cache Read` (input + output equals `Total Tokens`).
 - Rows with a `Cloud Agent ID` are one-shot cloud runs, not persistent bots, and are left out.
 - On plan billing `Cost` holds text such as `Included` or `Free`. The analyzer then prices every call from tokens with the pricing preset, so the calibration compares the model with that estimate, not with a bill.
-- `Automation ID` is used as the bot. When it is empty (common), the call is grouped by `Model` instead (e.g. `grok-bot-default`, `grok-bot-automation`). Such a bucket mixes several bots, and the report says so and lowers its confidence; for a per-bot split, export each bot separately or run recurring work as named automations.
+- `Automation ID` is used as the bot. When it is empty (common), the call is grouped by `Model` instead (e.g. `grok-bot-default`, `grok-bot-automation`). Such a bucket mixes several bots; `--schedules` splits it into named bots (below).
 - There is no chat id, so several chats can share a bucket. Spend and context percentiles are still right; growth and calibration are blended.
 
 For other exports the analyzer recognizes common column names (timestamp, bot_name, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, cost_usd, …); if they do not match, use `--map`:

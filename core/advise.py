@@ -14,15 +14,17 @@ Evidence tiers:
     judgment  sensitivity range (e.g. 10-30% fewer wake-ups), not a forecast
 Standard library only.
 """
+import bisect
 import math
 from datetime import datetime, timedelta, timezone
 
 try:
-    from . import analyze_usage, orgopt
+    from . import analyze_usage, orgopt, schedules
     from .i18n import t
 except ImportError:          # run as a plain script
     import analyze_usage
     import orgopt
+    import schedules
     from i18n import t
 
 CONF_W = {"high": 1.0, "medium": 0.6, "low": 0.3}
@@ -30,8 +32,14 @@ EFFORT_W = {"low": 1.0, "medium": 2.0, "high": 3.0}
 SHORT_SPAN_DAYS = 2.0
 MIN_SHARE = 0.01            # an action must be worth at least 1% of weekly spend
 HOTSPOT_SHARE = 0.4
+SPLIT_SHARE = 0.3           # a mixed bucket or unscheduled traffic this large is worth breaking down next
 FRESH_BASE = 8000           # a fresh chat's starting context (instructions + memory), tokens
 CALIB_OK = 0.15
+ACK_OUTPUT = 30             # same threshold as analyze_usage's acknowledgement wake-ups
+IDLE_OUTPUT = 80            # a single-call wake-up writing at most this much found nothing to do
+MATCH_EARLY = 60            # a scheduled wake-up may start this many seconds before the fire time ...
+MATCH_WINDOW = 300          # ... or up to this many seconds after it
+FREQ_IDLE = 0.4             # propose a lower frequency when at least 40% of scheduled checks are idle
 
 
 def parse_tz(s):
@@ -142,6 +150,96 @@ def trend_md(tr, lang="en"):
     return "\n".join(L)
 
 
+# ---------------------------------------------------------------- schedule attribution
+def _wakes(rows, gap):
+    by = {}
+    for r in rows:
+        by.setdefault(r["unit"], []).append(r)
+    out = []
+    for unit, rs in by.items():
+        for w in analyze_usage.sessionize(rs, gap):
+            out.append({"unit": unit, "start": w[0]["time"], "rows": w})
+    out.sort(key=lambda w: w["start"])
+    return out
+
+
+def wake_stats(wakes, pricing, has_cost, span_days):
+    """Spend and shape of a set of wake-ups (one bot's, or what is left of a bucket)."""
+    rows = [r for w in wakes for r in w["rows"]]
+    n = len(wakes)
+    if not n:
+        return None
+    usd = sum(_row_usd(r, pricing, has_cost) for r in rows)
+    ctx = [w["rows"][0]["input"] for w in wakes]
+    inp = sum(r["input"] for r in rows)
+    idle = [w for w in wakes if len(w["rows"]) == 1 and w["rows"][0]["output"] <= IDLE_OUTPUT]
+    short = [w["rows"][0] for w in wakes if len(w["rows"]) == 1 and w["rows"][0]["output"] <= ACK_OUTPUT]
+    return {"short_wakes": len(short), "short_usd": sum(orgopt.call_cost_usd(r["input"], r["cached"], r["output"], pricing) for r in short),"wakes": n, "usd": usd, "usd_week": usd * 7 / span_days, "per_wake": usd / n,
+            "wakes_per_day": n / span_days, "rounds_per_wake": len(rows) / n,
+            "C_p50": analyze_usage.percentile(ctx, 0.5), "C_p90": analyze_usage.percentile(ctx, 0.9),
+            "cache_hit": sum(r["cached"] for r in rows) / inp if inp else 0.0,
+            "idle_wakes": len(idle), "idle_share": len(idle) / n,
+            "idle_usd": sum(_row_usd(w["rows"][0], pricing, has_cost) for w in idle),
+            "long_premium_usd": sum(analyze_usage.cost_parts(r, pricing)[3] for r in rows)}
+
+
+def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=120,
+              early=MATCH_EARLY, window=MATCH_WINDOW):
+    """Give wake-ups to the bots whose schedule fired just before them (one wake-up per fire, nearest
+    first). What is left in a bucket is unscheduled: the user's messages and bot-to-bot pings."""
+    wakes = _wakes(rows, gap)
+    starts = [w["start"] for w in wakes]
+    t0, t1 = rows[0]["time"], rows[-1]["time"]
+    span_days = res["span_days"]
+    fires, pairs = {}, []
+    for sp in specs:
+        fires[sp["name"]] = schedules.fire_times(sp, t0 - timedelta(seconds=window), t1, tz)
+        for f in fires[sp["name"]]:
+            lo = bisect.bisect_left(starts, f - timedelta(seconds=early))
+            hi = bisect.bisect_right(starts, f + timedelta(seconds=window))
+            for i in range(lo, hi):
+                if sp["in"] and wakes[i]["unit"] != sp["in"]:
+                    continue
+                pairs.append((abs((starts[i] - f).total_seconds()), sp["name"], f, i))
+    pairs.sort(key=lambda p: (p[0], p[1]))
+    taken_w, taken_f, got = set(), set(), {sp["name"]: [] for sp in specs}
+    for _, name, f, i in pairs:
+        if i in taken_w or (name, f) in taken_f:
+            continue
+        taken_w.add(i)
+        taken_f.add((name, f))
+        got[name].append(i)
+    span_s = max((t1 - t0).total_seconds(), 1.0)
+    bots = []
+    for sp in specs:
+        eligible = [i for i, w in enumerate(wakes) if not sp["in"] or w["unit"] == sp["in"]]
+        free = sum(1 for i in eligible if i not in taken_w)
+        chance = free / span_s * (early + window) * len(fires[sp["name"]])
+        st = wake_stats([wakes[i] for i in got[sp["name"]]], pricing, has_cost, span_days)
+        n = len(got[sp["name"]])
+        bots.append({"name": sp["name"], "schedule": sp["text"], "spec": sp,
+                     "interval_min": schedules.interval_minutes(sp), "fires": len(fires[sp["name"]]),
+                     "matched": n, "match_rate": n / len(fires[sp["name"]]) if fires[sp["name"]] else 0.0,
+                     "chance_matches": chance, "reliable": n >= 5 and n >= 3 * chance,
+                     "units": sorted({wakes[i]["unit"] for i in got[sp["name"]]}), "stats": st})
+    bots.sort(key=lambda b: -(b["stats"]["usd"] if b["stats"] else 0))
+    touched = {u for b in bots for u in b["units"]}
+    remainder = []
+    for unit in sorted(touched):
+        rest = [w for i, w in enumerate(wakes) if w["unit"] == unit and i not in taken_w]
+        st = wake_stats(rest, pricing, has_cost, span_days)
+        if st:
+            remainder.append({"unit": unit, "stats": st})
+    total = res["total_usd"] or 1.0
+    for b in bots:
+        b["share"] = b["stats"]["usd"] / total if b["stats"] else 0.0
+    for r in remainder:
+        r["share"] = r["stats"]["usd"] / total
+    return {"bots": bots, "remainder": remainder, "touched_units": sorted(touched),
+            "window_s": window, "early_s": early,
+            "matched_share": sum(b["share"] for b in bots)}
+
+
 # ---------------------------------------------------------------- data gaps
 def gaps(res, mapping, info, lang="en"):
     """What the export cannot tell us. Each: code, severity (high/medium/low), detail, fix."""
@@ -178,14 +276,37 @@ def _top_units(units, key, n=2):
     return ", ".join(u["unit"] for u in picked) or "-"
 
 
-def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=60000, lang="en"):
+def _entities(res, att, lang="en"):
+    """The contexts to advise on: each unit, except that a bucket split by schedules is replaced by
+    its scheduled bots plus what is left (unscheduled traffic)."""
+    touched = set(att["touched_units"]) if att else set()
+    keys = ("C_p50", "wakes_per_day", "rounds_per_wake", "cache_hit", "wakes", "usd", "short_wakes")
+    ents = []
+    for u in res["units"]:
+        if u["unit"] in touched:
+            continue
+        ents.append(dict({k: u[k] for k in keys}, name=u["unit"], unit=u["unit"], share=u["share"],
+                         kind="bucket" if u.get("from_model") else "context", sawtooth=u["sawtooth"],
+                         C_floor=u["C_floor"], C_peak=u["C_peak"]))
+    for b in (att or {}).get("bots", []):
+        if b["stats"]:
+            ents.append(dict({k: b["stats"][k] for k in keys}, name=b["name"], unit=b["units"][0],
+                             share=b["share"], kind="bot", sawtooth=False, bot=b))
+    for r in (att or {}).get("remainder", []):
+        ents.append(dict({k: r["stats"][k] for k in keys}, name=t("p.other", lang, unit=r["unit"]),
+                         unit=r["unit"], share=r["share"], kind="remainder", sawtooth=False))
+    ents.sort(key=lambda e: -e["usd"])
+    return ents
+
+
+def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=60000, att=None, lang="en"):
     wk = 7 / res["span_days"]
     week_usd = res["total_usd"] * wk
     units = res["units"]
     err = res["calibration"]["error"]
     calib_ok = not math.isnan(err) and abs(err) <= CALIB_OK
-    gap_codes = {g["code"] for g in gap_list}
     thr = pricing.get("long_context_threshold")
+    ents = _entities(res, att, lang)
     actions = []
 
     def add(code, unit, low, high, conf, effort, tier, title_key=None, **kw):
@@ -195,27 +316,51 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=60000, lang
                         "confidence": conf, "effort": effort, "tier": tier,
                         "title": t(title_key or f"p.{code}", lang, unit=unit, thr=f"{thr:,.0f}" if thr else "-", **kw),
                         "why": t(f"p.{code}.why", lang, **kw),
-                        "how": t(f"p.{code}.how", lang, unit=unit, **kw)})
+                        "how": t(f"p.{code}.how", lang, unit=unit, **kw), "request": None})
         return actions[-1]
 
-    total_wakes = sum(u["wakes"] for u in units) or 1
-    # measured: dollars already spent on removable patterns
+    # measured, per scheduled bot: checks that find nothing to do. The cost per wake-up is measured, so
+    # fewer fires save that cost times the fires removed (the range allows busy checks to grow a little).
+    freq_bots, freq_ratio = set(), {}
+    for b in (att or {}).get("bots", []):
+        st = b["stats"]
+        if not st or st["wakes"] < 10 or st["idle_share"] < FREQ_IDLE:
+            continue
+        old = b["interval_min"]
+        factor = 8.0 if st["idle_share"] >= 1 else min(8.0, 1 / (1 - st["idle_share"]))
+        new = schedules.nice_interval(old * factor)
+        if new <= old:
+            continue
+        hi = st["usd_week"] * (1 - old / new)
+        a = add("frequency", b["name"], 0.7 * hi, hi, "high" if b["reliable"] else "medium", "low", "measured",
+                bot=b["name"], old=b["schedule"], new=schedules.fmt_interval(new, lang),
+                n=st["wakes"], idle=st["idle_share"], per=st["per_wake"], c=f"{st['C_p50']:,.0f}", wk=st["usd_week"])
+        if a:
+            a["request"] = t("p.frequency.req", lang, bot=b["name"], old=b["schedule"],
+                             new=f"every {schedules.fmt_interval(new)}")
+            a["new_interval_min"] = new
+            freq_bots.add(b["name"])
+            freq_ratio[b["name"]] = old / new
+
     for u in units:
         if u["long_context_extra_usd"] > 0:
             x = u["long_context_extra_usd"] * wk
             add("long_context", u["unit"], x, x, "high", "low", "measured",
                 n=u["long_context_calls"], usd=u["long_context_extra_usd"])
+    total_wakes = sum(u["wakes"] for u in units) or 1
     short = sum(u["short_wakes"] for u in units)
-    x = res["anatomy"]["short_wake_usd"] * wk
-    add("ack", None, x / 2, x, "medium", "low", "measured",
-        n=short, p=short / total_wakes, units=_top_units(units, "short_wake_usd"))
+    overlap = sum(b["stats"]["short_usd"] for b in (att or {}).get("bots", []) if b["name"] in freq_bots)
+    x = max(0.0, res["anatomy"]["short_wake_usd"] - overlap) * wk     # idle scheduled checks are counted above
+    a = add("ack", None, x / 2, x, "medium", "low", "measured",
+            n=short, p=short / total_wakes, units=_top_units(units, "short_wake_usd"))
+    if a:
+        a["request"] = t("p.ack.req", lang)
     rf = sum(u["read_first_wakes"] for u in units)
     x = res["anatomy"]["read_first_usd"] * wk
-    add("read_first", None, x / 2, x, "medium", "low", "measured",
-        n=rf, p=rf / total_wakes, units=_top_units(units, "read_first_usd"))
-    x = res["anatomy"]["in_wake_miss_premium_usd"] * wk
-    add("cache", None, x / 2, x, "medium", "medium", "measured",
-        usd=res["anatomy"]["in_wake_miss_premium_usd"], units=_top_units(units, "in_wake_miss_premium_usd"))
+    a = add("read_first", None, x / 2, x, "medium", "low", "measured",
+            n=rf, p=rf / total_wakes, units=_top_units(units, "read_first_usd"))
+    if a:
+        a["request"] = t("p.read_first.req", lang)
 
     # modeled: hand over to a fresh chat whenever the context passes `handover_at`. Under that policy
     # a context averages about (fresh start + threshold) / 2; the verified reset model prices one
@@ -225,54 +370,87 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=60000, lang
     fresh = FRESH_BASE + orgopt.DEFAULT_HANDOVER
     avg_new = (fresh + handover_at) / 2
     ho = []
-    for u in units:
-        c = u["C_p50"]
+    for e in ents:
+        c = e["C_p50"]
         if c <= handover_at:
             continue
+        # price the hand-over on the wake-ups that remain after the measured fixes (fewer scheduled
+        # fires, no acknowledgement wake-ups), so the savings do not count the same wake-ups twice
+        if e["name"] in freq_ratio:
+            wpd = e["wakes_per_day"] * freq_ratio[e["name"]]
+        else:
+            wpd = e["wakes_per_day"] * (1 - e["short_wakes"] / e["wakes"]) if e["wakes"] else 0.0
         r = orgopt.reset_decision(c, avg_new - orgopt.DEFAULT_HANDOVER, orgopt.DEFAULT_HANDOVER,
-                                  u["wakes_per_day"], 7, u["rounds_per_wake"], u["cache_hit"], pricing, lang=lang)
+                                  wpd, 7, e["rounds_per_wake"], e["cache_hit"], pricing, lang=lang)
         if r["net_saving_usd"] > 0:
-            ho.append((u, r))
+            ho.append((e, r))
     if ho:
         ho.sort(key=lambda x: -x[1]["net_saving_usd"])
         hi = sum(r["net_saving_usd"] for _, r in ho)
-        names = ", ".join(f"{u['unit']} ≈ {u['C_p50']:,.0f}" for u, _ in ho[:3]) + ("…" if len(ho) > 3 else "")
-        saw = [u for u, _ in ho if u["sawtooth"]]
+        covered = {e["unit"] for e, _ in ho}
+        absorbed = [a for a in actions if a["code"] == "long_context" and a["unit"] in covered]
+        prem = sum(a["usd_week_low"] for a in absorbed)
+        names = ", ".join(f"{e['name']} ≈ {e['C_p50']:,.0f}" for e, _ in ho[:4]) + ("…" if len(ho) > 4 else "")
+        saw = [e for e, _ in ho if e["sawtooth"]]
         sawtxt = t("p.handover.saw", lang, floor=f"{saw[0]['C_floor']:,.0f}", peak=f"{saw[0]['C_peak']:,.0f}",
-                   unit=saw[0]["unit"]) if saw else ""
-        a = add("handover", ", ".join(u["unit"] for u, _ in ho), hi / 2, hi, conf, "low", "modeled",
-                units=names, at=f"{handover_at:,.0f}", avg=f"{avg_new:,.0f}", saw=sawtxt)
+                   unit=saw[0]["name"]) if saw else ""
+        if absorbed:
+            sawtxt += t("p.handover.absorbed", lang,
+                        n=sum(u["long_context_calls"] for u in units if u["unit"] in covered),
+                        thr=f"{thr:,.0f}" if thr else "-", usd=prem)
+        a = add("handover", ", ".join(e["name"] for e, _ in ho), max(hi / 2, prem), max(hi, prem), conf, "low",
+                "modeled", units=names, at=f"{handover_at:,.0f}", avg=f"{avg_new:,.0f}", saw=sawtxt)
         if a:
-            a["per_unit"] = [{"unit": u["unit"], "usd_week": r["net_saving_usd"]} for u, r in ho]
+            a["per_unit"] = [{"unit": e["name"], "context": e["unit"], "usd_week": r["net_saving_usd"]} for e, r in ho]
+            named = [e["name"] for e, _ in ho if e["kind"] in ("bot", "context")]
+            if any(e["kind"] in ("bucket", "remainder") for e, _ in ho):
+                named.append(t("p.req.others", lang))
+            a["request"] = t("p.handover.req", lang, names="、".join(named) if lang == "zh-TW" else ", ".join(named),
+                             at=f"{handover_at:,.0f}")
+            for x in absorbed:
+                actions.remove(x)
+    # cache misses inside a wake-up cost in proportion to the context, so after the hand-overs and
+    # frequency changes only the remaining share of input spend is left to recover
+    removed = sum(a["usd_week_high"] for a in actions if a["code"] in ("handover", "frequency"))
+    left = max(0.0, 1 - removed / week_usd) if week_usd else 1.0
+    x = res["anatomy"]["in_wake_miss_premium_usd"] * wk * left
+    add("cache", None, x / 2, x, "medium", "medium", "measured",
+        usd=res["anatomy"]["in_wake_miss_premium_usd"], units=_top_units(units, "in_wake_miss_premium_usd"))
 
-    # judgment: the biggest bucket's wake-up frequency
-    hot = units[0] if units else None
-    if hot and hot["share"] >= HOTSPOT_SHARE:
-        x = hot["usd"] * wk
-        ch = next((c for c in tr["changes"] if c["unit"] == hot["unit"]), None) if tr else None
+    for a in actions:
+        if a["code"] == "long_context":
+            a["request"] = t("p.handover.req", lang, names=a["unit"], at=f"{handover_at:,.0f}")
+
+    # the biggest remaining driver (bots whose schedule is already being changed are set aside): a named
+    # bot gets a judgment-tier action; a bucket that still mixes several bots, or unscheduled traffic,
+    # is the next analysis step, not something to hand back to the client
+    rest = [e for e in ents if e["name"] not in freq_bots]
+    top = rest[0] if rest else None
+    analysis_next = None
+    if top and top["kind"] == "bucket" and top["share"] >= SPLIT_SHARE:
+        analysis_next = {"kind": "split_bucket", "unit": top["name"], "share": top["share"]}
+    elif top and top["kind"] == "remainder" and top["share"] >= SPLIT_SHARE:
+        analysis_next = {"kind": "split_remainder", "unit": top["unit"], "share": top["share"],
+                         "usd_week": top["usd"] * wk}
+    elif top and top["share"] >= HOTSPOT_SHARE:
+        x = top["usd"] * wk
+        ch = next((c for c in tr["changes"] if c["unit"] == top["name"]), None) if tr else None
         chg = ""
         if ch and ch["wakes_day_before"] and abs(ch["wakes_day_after"] / ch["wakes_day_before"] - 1) >= 0.2:
             chg = t("p.hotspot.chg", lang, a=ch["wakes_day_before"], b=ch["wakes_day_after"])
-        add("hotspot", hot["unit"], 0.1 * x, 0.3 * x, "low", "medium", "judgment",
-            title_key="p.hotspot_bucket" if hot.get("from_model") else None,
-            p=hot["share"], w=hot["wakes_per_day"], per=hot["usd"] / hot["wakes"], chg=chg)
+        add("hotspot", top["name"], 0.1 * x, 0.3 * x, "low", "medium", "judgment",
+            p=top["share"], w=top["wakes_per_day"], per=top["usd"] / top["wakes"], chg=chg)
 
     for a in actions:
         mid = (a["usd_week_low"] + a["usd_week_high"]) / 2
         a["score"] = mid * CONF_W[a["confidence"]] / EFFORT_W[a["effort"]]
     actions.sort(key=lambda a: -a["score"])
 
-    # combined, each dollar once: measured patterns are disjoint; a hand-over absorbs that unit's
-    # long-context premium; judgment ranges are kept out of the total.
-    ho_units = {p["unit"] for a in actions if a["code"] == "handover" for p in a.get("per_unit") or []}
-    lo = hi = 0.0
-    for a in actions:
-        if a["tier"] == "judgment":
-            continue
-        if a["code"] == "long_context" and a["unit"] in ho_units:
-            continue      # the hand-over removes this premium too; count the larger, modeled figure once
-        lo += a["usd_week_low"]
-        hi += a["usd_week_high"]
+    # combined, each dollar once: measured patterns are disjoint (idle scheduled checks are taken out of
+    # the acknowledgement figure, the long-context premium is folded into the hand-over); judgment
+    # ranges are kept out of the total.
+    lo = sum(a["usd_week_low"] for a in actions if a["tier"] != "judgment")
+    hi = sum(a["usd_week_high"] for a in actions if a["tier"] != "judgment")
     lo, hi = min(lo, week_usd), min(hi, week_usd)
 
     goal = None
@@ -280,9 +458,9 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=60000, lang
         need = week_usd - goal_usd_week
         goal = {"target": goal_usd_week, "need": need, "met": need <= 0, "reachable": need <= lo,
                 "remaining": max(0.0, need - lo)}
-        if hot and goal["remaining"] > 0 and hot["usd"] > 0:
-            goal["hotspot_cut"] = goal["remaining"] / (hot["usd"] * wk)
-            goal["hotspot_unit"] = hot["unit"]
+        if top and goal["remaining"] > 0 and top["usd"] > 0:
+            goal["hotspot_cut"] = goal["remaining"] / (top["usd"] * wk)
+            goal["hotspot_unit"] = top["name"]
 
     # overall confidence
     sev = {g["severity"] for g in gap_list}
@@ -295,7 +473,7 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=60000, lang
         conf = "high"
     return {"usd_per_week": week_usd, "actions": actions, "combined_low": lo, "combined_high": hi,
             "goal": goal, "confidence": conf, "confidence_gaps": reasons, "calibration_ok": calib_ok,
-            "handover_at": handover_at}
+            "handover_at": handover_at, "entities": ents, "analysis_next": analysis_next}
 
 
 def kpis(res, pl, pricing, tz=timezone.utc, lang="en"):
@@ -323,7 +501,7 @@ def kpis(res, pl, pricing, tz=timezone.utc, lang="en"):
     if units and thr:
         u = units[0]
         ho = next((a for a in pl["actions"] if a["code"] == "handover"), None)
-        if ho and u["unit"] in {p["unit"] for p in ho["per_unit"]}:
+        if ho and u["unit"] in {p["context"] for p in ho["per_unit"]}:
             target = pl["handover_at"]
         else:
             target = min(thr, 5000 * math.ceil(max(u["C_p90"] * 0.6, 3 * (FRESH_BASE + orgopt.DEFAULT_HANDOVER)) / 5000))
@@ -334,7 +512,8 @@ def kpis(res, pl, pricing, tz=timezone.utc, lang="en"):
 
 # ---------------------------------------------------------------- report / memo
 def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, goal_usd_week=None,
-           tz=timezone.utc, handover_at=60000, lang="en"):
+           tz=timezone.utc, handover_at=60000, schedule_specs=None, lang="en"):
+    """Everything the memo needs. `schedule_specs` (from schedules.load) splits buckets into bots."""
     info = {}
     rows, mapping, skipped = analyze_usage.load_rows(csv_path, overrides, cached_separate, lang, info)
     res = analyze_usage.analyze(rows, pricing, gap, has_cost="cost" in mapping, lang=lang)
@@ -344,8 +523,16 @@ def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, go
         u["from_model"] = u["unit"] in from_model
     tr = trend(rows, pricing, "cost" in mapping, tz)
     gl = gaps(res, mapping, info, lang)
-    pl = plan(res, tr, gl, pricing, goal_usd_week, handover_at, lang)
-    return {"analysis": res, "trend": tr, "gaps": gl, "plan": pl, "kpis": kpis(res, pl, pricing, tz, lang),
+    att = attribute(rows, res, schedule_specs, pricing, "cost" in mapping, tz, gap) if schedule_specs else None
+    if att:
+        for g in gl:
+            if g["code"] in ("bot_empty", "no_bot"):
+                g["detail"] += t("g.att", lang, p=att["matched_share"], n=sum(1 for b in att["bots"] if b["stats"]))
+                if att["matched_share"] >= 0.3 and g["severity"] == "high":
+                    g["severity"] = "medium"
+    pl = plan(res, tr, gl, pricing, goal_usd_week, handover_at, att, lang)
+    return {"analysis": res, "trend": tr, "gaps": gl, "plan": pl, "attribution": att,
+            "kpis": kpis(res, pl, pricing, tz, lang),
             "pricing": {"model": pricing.get("model", "?"), **pricing["per_million"],
                         "long_context_threshold": pricing.get("long_context_threshold")},
             "gap_seconds": gap, "tz": tz}
@@ -373,8 +560,15 @@ def memo_md(rep, lang="en"):
         hot = units[0]
         priced = an["uncached_input_usd"] + an["cached_input_usd"] + an["output_usd"]
         reread = (an["uncached_input_usd"] + an["cached_input_usd"]) / priced if priced else 0.0
+        att = rep.get("attribution")
+        inside = ""
+        if att and hot["unit"] in att["touched_units"]:
+            top_bot = next((e for e in pl["entities"] if e["kind"] == "bot" and e["unit"] == hot["unit"]), None)
+            if top_bot:
+                inside = t("m.b2_bot", lang, bot=top_bot["name"], p=top_bot["share"], sched=top_bot["bot"]["schedule"])
         L.append("2. " + t("m.b2", lang, p=hot["share"], unit=hot["unit"],
-                           bucket=t("m.b2_bucket", lang) if hot.get("from_model") else "", reread=reread))
+                           bucket=t("m.b2_bucket", lang) if hot.get("from_model") and not inside else "",
+                           reread=reread) + inside)
     g = pl["goal"]
     goal_txt = ""
     if g:
@@ -410,6 +604,25 @@ def memo_md(rep, lang="en"):
         usd = sum(u["usd"] for u in rest)
         L.append(f"| {t('m.others', lang, n=len(rest))} | {_usd(usd * wk)} | {sum(u['share'] for u in rest):.0%} | "
                  f"{sum(u['wakes_per_day'] for u in rest):.1f} | | |")
+    att = rep.get("attribution")
+    if att and att["bots"]:
+        L += ["", f"### {t('m.inside', lang, units=', '.join(att['touched_units']))}", "",
+              t("m.inside_header", lang), "|---|---|---|---|---|---|---|---|"]
+        for b in att["bots"]:
+            st = b["stats"]
+            if not st:
+                L.append(f"| {b['name']} | `{b['schedule']}` | 0 / {b['fires']} | | | | | |")
+                continue
+            L.append(f"| {b['name']} | `{b['schedule']}` | {b['matched']} / {b['fires']} | {_usd(st['usd_week'])} | "
+                     f"{b['share']:.0%} | ${st['per_wake']:,.3f} | {st['C_p50']:,.0f} | {st['idle_share']:.0%} |")
+        for r in att["remainder"]:
+            st = r["stats"]
+            L.append(f"| {t('p.other', lang, unit=r['unit'])} | {t('m.unscheduled', lang)} | {st['wakes']} | "
+                     f"{_usd(st['usd_week'])} | {r['share']:.0%} | ${st['per_wake']:,.3f} | {st['C_p50']:,.0f} | "
+                     f"{st['idle_share']:.0%} |")
+        weak = [b["name"] for b in att["bots"] if not b["reliable"]]
+        L += ["", t("m.inside_note", lang, w=att["window_s"] // 60, idle=IDLE_OUTPUT)
+              + (t("m.inside_weak", lang, bots=", ".join(weak)) if weak else "")]
     priced = an["uncached_input_usd"] + an["cached_input_usd"] + an["output_usd"] or 1
     L += ["", f"### {t('m.anatomy', lang)}", "", t("m.an_header", lang), "|---|---|---|---|"]
     for key, label in (("uncached_input_usd", "m.an_unc"), ("cached_input_usd", "m.an_cached"),
@@ -445,14 +658,26 @@ def memo_md(rep, lang="en"):
         L += ["", f"**{t('m.how', lang)}**", ""]
         for i, a in enumerate(pl["actions"], 1):
             L.append(f"{i}. {a['how']}")
+        reqs = [a["request"] for a in pl["actions"] if a.get("request")]
+        if reqs:
+            L += ["", f"### {t('m.paste', lang)}", "", t("m.paste_note", lang), "", "```text", t("m.paste_intro", lang)]
+            L += [f"{i}. {r}" for i, r in enumerate(reqs, 1)]
+            L += [t("m.paste_outro", lang), "```"]
     else:
         L.append(t("m.none_rec", lang))
 
     # decisions and data needed
     L += ["", f"## {t('m.decisions', lang)}", ""]
     dec = []
-    if units and units[0]["share"] >= HOTSPOT_SHARE:
-        dec.append(t("m.decide_hot", lang, unit=units[0]["unit"]))
+    nxt = pl.get("analysis_next")
+    freq = {a["unit"] for a in pl["actions"] if a["code"] == "frequency"}
+    top = next((e for e in pl["entities"] if e["name"] not in freq), None)
+    if nxt and nxt["kind"] == "split_bucket":
+        dec.append(t("m.split_bucket", lang, unit=nxt["unit"], p=nxt["share"]))
+    elif nxt and nxt["kind"] == "split_remainder":
+        dec.append(t("m.split_remainder", lang, unit=nxt["unit"], p=nxt["share"], usd=nxt["usd_week"]))
+    elif top and top["share"] >= HOTSPOT_SHARE:
+        dec.append(t("m.decide_hot", lang, unit=top["name"]))
     g = pl["goal"]
     if g and not g["met"] and not g["reachable"]:
         if g.get("hotspot_cut") is not None and g["hotspot_cut"] <= 1:
@@ -483,6 +708,7 @@ def memo_md(rep, lang="en"):
           "- " + t("m.ap_tiers", lang),
           "- " + t("m.ap_calib", lang, m=c["model_usd"], a=c["actual_usd"], err=c["error"]),
           "- " + t("m.ap_wake", lang, gap=rep["gap_seconds"]),
+          *(["- " + t("m.ap_match", lang, early=att["early_s"], w=att["window_s"], idle=IDLE_OUTPUT)] if att else []),
           "- " + t("m.ap_map", lang, m=", ".join(f"{k}={v}" for k, v in res["column_mapping"].items())),
           "- " + t("m.ap_detail", lang)]
     return "\n".join(L) + "\n"

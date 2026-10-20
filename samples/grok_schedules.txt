@@ -1,0 +1,5 @@
+# Schedules of the bots in the synthetic Grok export (times in UTC+8).
+# One bot per line: NAME every 30m [HH:MM-HH:MM] | at HH:MM,HH:MM | cron M H DOM MON DOW   [in=BUCKET]
+monitor    every 30m              in=grok-bot-default
+digest     at 09:00,18:00         in=grok-bot-default
+heartbeat  every 1h               in=grok-bot-automation

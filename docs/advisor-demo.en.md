@@ -2,62 +2,59 @@
 
 **English** · [繁體中文](advisor-demo.zh-TW.md)
 
-This is what working with the advisor bot looks like, end to end. The advisor follows the consultant playbook in [`ADVISOR_BOT.en.md`](../adapters/grok-bot/ADVISOR_BOT.en.md): frame the goal, diagnose, recommend, plan, verify. Every number below is real output from this repo's tools, run on the synthetic data in [`samples/`](../samples/). Reproduce it:
+This is what working with the advisor bot looks like, end to end, on the most common Grok Bot situation: the quota runs out early and the usage export cannot tell the bots apart. The advisor follows the playbook in [`ADVISOR_BOT.en.md`](../adapters/grok-bot/ADVISOR_BOT.en.md): frame, **investigate**, diagnose, recommend, plan and verify. Every number below is real output from this repo's tools on synthetic data. Reproduce it:
 
 ```bash
-bto report samples/sample_usage.csv --platform grok-bot --goal-usd-week 18 --out memo.md
-bto org samples/demo/org.txt --platform grok-bot
-bto compare samples/demo/org.txt samples/demo/org_after.txt --platform grok-bot
+python3 samples/make_grok_export.py usage-events.csv
+bto report usage-events.csv --platform grok-bot --tz +08:00 --goal-usd-week 68 \
+    --schedules samples/grok_schedules.txt --out memo.md
 ```
+
+The full memo it produces: [sample-memo-grok.en.md](sample-memo-grok.en.md).
 
 ---
 
-**Client:** Our bot usage doubled this month. Here's last week's export. We need to get it under about $18 a week.
+**Client:** My goal is to make 100% of the quota last 7 days. Right now it's gone in about 3. *(attaches the usage export)*
 
-**Advisor** *(runs `bto report` with the $18 target; the self-check and the commands stay out of the answer)*:
+**Advisor** *(no questions yet: it reads every bot's settings and writes their schedules to `schedules.txt`: monitor every 30 minutes, digest at 09:00 and 18:00, heartbeat every hour. It also notes monitor's current hand-over rule, then runs `bto report` with the schedules and a budget of 3/7 of the current pace)*:
 
-> Your bots run at about **$27 a week** at the current pace, so reaching $18 means cutting about a third. Almost all of it (96%) is bots re-reading their own chats, not writing. Three of your contexts carry 77% of the cost, and two of them are growing fast.
+> At this pace your bots use about **$158 a week**; to make the quota last 7 days we need about **$68**. **Half of all spend is one bot: monitor.** It wakes every 30 minutes, re-reads a 110K-token chat each time, and finds nothing to do in 64% of those checks. Its chat is only summarized when the platform does it automatically, at about 165K tokens.
 >
-> | # | Action | Saves / week | How sure |
+> | # | Change | Saves / week | How sure |
 > |---|---|---|---|
-> | 1 | Hand over to a fresh chat once a chat passes 60K tokens (chief and support/a today) | $3.40–6.70 | modeled, medium |
-> | 2 | Put the brief in the ping instead of "go read the board" (researcher) | $1.90–3.80 | measured, medium |
-> | 3 | Stop breaking the prompt cache mid-wake-up | $1.30–2.60 | measured, medium |
-> | 4 | No more "OK" replies (writer) | $0.50–0.90 | measured, medium |
+> | 1 | **monitor: every 30 min → every 2 h** | $41–59 | measured, high |
+> | 2 | **monitor, digest and your own chats: hand over to a fresh chat at 60K tokens** (today: only the platform's automatic summary) | $31–62 | modeled, medium |
+> | 3 | **heartbeat: every 1 h → every 3 h** (65% of its checks are idle) | $2 | measured, high |
+> | 4 | Put short content in the ping instead of "go read the board" | $2–4 | measured, medium |
 >
-> Together that is **$7–14 a week**, counting each dollar once. Reaching $18 takes about **$2 a week more**, which means waking researcher about 23% less often or accepting a slightly higher budget. That is your call. The one-page memo is attached ([example](sample-memo.en.md)): where the money goes, these actions with owners to fill in, and the five numbers we will check on 14 October.
+> Together about **$78–131 a week**, counting each dollar once. At the low end we would still be about $12 short. The rest sits in your own chats and bot-to-bot pings ($70/week), and I am mapping who pings whom next.
 >
-> One question so I can also check the team structure: who hands work to whom, about how often, and is there a group chat everyone posts in?
+> Change request for the main bot:
+>
+> ```text
+> Please make these changes to my bots and report the result of each one:
+> 1. Change monitor's schedule from "every 30m" to "every 2h"; keep everything else as it is.
+> 2. Add this rule to the instructions of monitor and digest, replacing any existing hand-over or reset rule: "When the current chat's context passes 60,000 tokens, write a hand-over note (goals, decisions made, open items, where the key files are; at most 3,000 tokens), save it, then continue in a new chat that starts from that note."
+> 3. Change heartbeat's schedule from "every 1h" to "every 3h"; keep everything else as it is.
+> 4. Add to every bot's instructions: "When you notify another bot, include the content itself if it is a paragraph or less. For longer content, write it to a file and give the path and the exact section to read."
+> Do not change anything else.
+> ```
+>
+> Shall I send it? One decision for you: with monitor every 2 hours, an incident can wait up to 2 hours to be noticed. Is that acceptable, or should the alerting bot ping monitor directly when something breaks?
 
-**Client:** chief → researcher about 6 a day, short briefs. researcher → writer 6 a day, full drafts. writer → reviewer 4 a day; reviewer → chief 4 a day, short verdicts. writer replies "got it" to researcher. All four are in a group where they post progress updates, a few paragraphs each. researcher always reads the board first.
+**Client:** Send it. Two hours is fine.
 
-**Advisor** *(writes [`samples/demo/org.txt`](../samples/demo/org.txt) from the measurements and the answers, runs `bto org`, then tests a redesign with `bto compare`)*:
+**Advisor** *(sends the request to the main bot and relays its report)*:
 
-> First, a reconciliation. The team as you describe it would cost about **$158 a week**, far more than the $27 in the export. Either the export covers only part of the traffic (one workspace, or the busy days are missing), or the group posts are shorter than "a few paragraphs". Before you act on the dollar figures below, please check that the export covers every bot. The **ratio** holds either way.
->
-> As described, the structure has three costly habits:
-> - every group post lands in all four contexts (about 700 tokens each);
-> - researcher pays twice per ping: once to read the board and again to work;
-> - "got it" replies wake researcher four times a day for nothing.
->
-> I tested the redesign (no acknowledgements, briefs in the message, one-line status in the group, hand-overs at a set threshold):
->
-> | | Before | After |
-> |---|---|---|
-> | Modeled cost / week | $157.58 | $21.69 (**0.14×**) |
-> | Most expensive bot | researcher, 73% | (spread out) |
->
-> **Plan.** This week: the two instruction changes (no "OK", briefs in the ping); they cost nothing and need no restructuring. Next week: hand-overs at 60K and one-line group status. **Decision for you:** whether researcher's wake-up frequency is a business need. **Data:** an export that covers all bots.
->
-> **Check on 14 October:** weekly spend ≤ $18, "OK" wake-ups ≤ 5%, board-first wake-ups ≤ 10%, cache share ≥ 80%, researcher's typical context ≤ 45K. Export the same seven days again and I will compare like for like. Next time, start a fresh chat with me; it keeps my own costs down.
+> Done: all four changes are in place. **Check on 26 October:** weekly spend ≤ $68, cache share ≥ 80%, and the typical context of the default bots ≤ 60K. Export the same seven days again then and I will compare like for like. Meanwhile I will map the unscheduled $70/week. Next time, start a fresh chat with me; it keeps my own costs down.
 
 ---
 
 ## What makes this a consultant and not a calculator
 
-- **Answer first, in dollars per week**, then the few numbers that support a decision. Method, column mappings and self-checks stay out of the answer; they are in the memo's appendix.
-- **It frames the goal.** It restates the target, works out the gap ("a third") and says what reaching it takes, including the trade-off the client has to decide.
-- **Imperfect data still gets an answer.** Every figure carries its evidence tier (measured, modeled or judgment) and a confidence level. When something is unknown, the advisor says how to find out.
-- **It is sceptical of its own inputs.** The described team and the export disagree, so it reconciles them before recommending a redesign.
-- **It closes the loop.** Owners, a sequence, the decisions only the client can make, and KPIs with a check date.
-- **It spends little itself.** One round of questions, no acknowledgements, and the fresh-chat reminder once, at the end.
+- **It investigates before it asks.** Which bots exist, their schedules, their hand-over rules: the advisor reads them itself. The client is asked only what no system knows (is a 2-hour delay acceptable?) and for approval.
+- **It names names.** The export only says `grok-bot-default`. Matching each bot's schedule against the wake-up times turns that into "monitor, $79 a week, 64% idle checks".
+- **Recommendations are changes, not principles.** Each one names the bot, the current setting and the new one, the saving and its evidence. All of them come as one message the main bot can execute.
+- **Each dollar is counted once.** The schedule change and the hand-over overlap, so the hand-over is priced on the wake-ups that remain; idle checks are not counted again as acknowledgements.
+- **Imperfect data still gets an answer**, labeled measured, modeled or judgment, with the remaining gap and the next step stated.
+- **It closes the loop**: approval, execution through the main bot, KPIs with a check date, and the fresh-chat reminder once, at the end.

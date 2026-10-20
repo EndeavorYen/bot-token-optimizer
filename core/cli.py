@@ -2,6 +2,7 @@
 """bto — bot token optimizer command line.
 
     bto report usage.csv --platform grok-bot --goal-usd-week 300 --out memo.md   # one-page memo
+    bto report usage.csv --schedules schedules.txt --tz +08:00                  # split buckets into bots
     bto analyze usage.csv --platform grok-bot --org-out org.json
     bto trend usage.csv --tz +08:00
     bto init                      # describe your bots by answering questions
@@ -18,15 +19,16 @@ import math
 import sys
 
 try:
-    from . import __version__, advise, analyze_usage, orgopt, orgspec
+    from . import __version__, advise, analyze_usage, orgopt, orgspec, schedules
     from .i18n import resolve_lang
 except ImportError:          # run as a plain script
     import advise
     import analyze_usage
     import orgopt
     import orgspec
+    import schedules
     from i18n import resolve_lang
-    __version__ = "0.3.0"
+    __version__ = "0.4.0"
 
 
 def _dump(obj):
@@ -76,6 +78,8 @@ def build_parser():
     csv_args(s)
     s.add_argument("--goal-usd-week", type=float, help="weekly budget to test the plan against")
     s.add_argument("--handover-at", type=float, default=60000, help="hand-over threshold to evaluate (tokens)")
+    s.add_argument("--schedules", help="schedules file (one bot per line: NAME every 30m | at 09:00,18:00 | cron ...) "
+                                       "to split buckets into bots")
     s.add_argument("--out", help="also write the memo to this file")
 
     s = sub.add_parser("trend", parents=[common], help="spend per day and what changed")
@@ -173,7 +177,7 @@ def main(argv=None):
         import os
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         return 0
-    except (orgspec.OrgSpecError, analyze_usage.UsageError, FileNotFoundError, ValueError) as e:
+    except (orgspec.OrgSpecError, analyze_usage.UsageError, schedules.ScheduleError, FileNotFoundError, ValueError) as e:
         print(f"bto: {e}", file=sys.stderr)
         return 2
 
@@ -200,8 +204,9 @@ def _run(a, lang, pricing, cap):
     elif a.cmd in ("report", "trend"):
         overrides = dict(m.split("=", 1) for m in a.map)
         tz = advise.parse_tz(a.tz)
+        specs = schedules.load(a.schedules) if getattr(a, "schedules", None) else None
         rep = advise.report(a.csv, pricing, overrides, a.cached_separate, a.gap,
-                            getattr(a, "goal_usd_week", None), tz, getattr(a, "handover_at", 60000), lang)
+                            getattr(a, "goal_usd_week", None), tz, getattr(a, "handover_at", 60000), specs, lang)
         if a.cmd == "trend":
             _dump(rep["trend"]) if a.json else print(advise.trend_md(rep["trend"], lang))
         else:
@@ -209,7 +214,15 @@ def _run(a, lang, pricing, cap):
             if a.out:
                 with open(a.out, "w", encoding="utf-8") as f:
                     f.write(text)
-            _dump({k: v for k, v in rep.items() if k != "tz"}) if a.json else print(text)
+            if a.json:
+                if rep.get("attribution"):
+                    for b in rep["attribution"]["bots"]:
+                        b.pop("spec", None)
+                for e in rep["plan"]["entities"]:
+                    e.pop("bot", None)
+                _dump({k: v for k, v in rep.items() if k != "tz"})
+            else:
+                print(text)
     elif a.cmd == "init":
         orgspec.run_init(a.out, lang)
     elif a.cmd == "convert":

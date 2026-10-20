@@ -24,6 +24,7 @@ jobs:
           bto org samples/org_before.txt --platform grok-bot --lang en
           bto analyze samples/sample_usage.csv --lang zh-TW > /dev/null
           bto report samples/sample_usage.csv --platform grok-bot --tz +08:00 --lang zh-TW > /dev/null
+          python samples/make_grok_export.py /tmp/g.csv && bto report /tmp/g.csv --schedules samples/grok_schedules.txt --tz +08:00 > /dev/null
 
   docs:
     runs-on: ubuntu-latest
@@ -45,7 +46,7 @@ jobs:
           git diff --exit-code docs/calculator/presets.js || (echo "Run python docs/calculator/build_presets.py" && exit 1)
       - name: Sample memos match the tools
         run: |
-          for l in en zh-TW; do python core/cli.py report samples/sample_usage.csv --platform grok-bot --goal-usd-week 18 --lang $l --out docs/sample-memo.$l.md > /dev/null; done
-          git diff --exit-code docs/sample-memo.*.md || (echo "Regenerate the sample memos (see docs/advisor-demo.en.md)" && exit 1)
+          python docs/make_memos.py
+          git diff --exit-code docs/sample-memo*.md || (echo "Run python docs/make_memos.py" && exit 1)
       - name: Web calculator matches the Python model
         run: node tests/calculator_parity.mjs

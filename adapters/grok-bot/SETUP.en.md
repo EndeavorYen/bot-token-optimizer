@@ -2,7 +2,7 @@
 
 **English** · [繁體中文](SETUP.zh-TW.md)
 
-On Grok Bot, a new bot is usually created by asking one of your existing bots. This guide has every message written out, ready to copy and paste. It takes about 10 minutes.
+On Grok Bot, a new bot is usually created by asking one of your existing bots. This guide has every message written out, ready to copy and paste. It takes about 10 minutes. Once set up, the advisor looks up your bots' settings itself, so all you tell it is your goal.
 
 | Step | Talk to | What happens |
 |---|---|---|
@@ -28,19 +28,21 @@ Please create a new bot with exactly this specification. Do not add, drop or "im
 3. Workspace: clone https://github.com/EndeavorYen/bot-token-optimizer into its workspace and keep the folder name bot-token-optimizer. It must be able to run python3 in that folder.
 4. Instructions: set the FULL text of adapters/grok-bot/ADVISOR_BOT.en.md from that repo as its instructions, verbatim. Do not summarize, rewrite, translate or drop sections, and do not add rules of your own.
 5. Wake-ups: do not add it to any group, do not give it schedules or automations, do not subscribe it to notifications. It wakes up only when I message it directly.
-6. Permissions: it does not need, and must not have, permission to change other bots.
+6. Permissions: it needs to READ every bot's settings (name, instructions, schedules and automations, groups, chat length), so it can investigate by itself instead of asking me. It does not need, and must not have, permission to change other bots.
 
-When done, report only these four things, nothing else:
+When done, report only these five things, nothing else:
 (a) the bot's name
 (b) the first line of its instructions
 (c) the last heading starting with "## " in its instructions
 (d) whether the clone worked, and the output of python3 core/cli.py --version run in its workspace
+(e) whether it can read the other bots' settings (yes / no)
 ```
 
 **Why it is worded this way:**
-- **Verbatim:** bots like to "tidy up" long instructions into bullet points. The advisor's tone, number rules and examples live in the details; summarized, it drifts back to answering only what was asked.
+- **Verbatim:** bots like to "tidy up" long instructions into bullet points. The advisor's method, number rules and examples live in the details; summarized, it drifts back to answering only what was asked.
+- **Read, not change:** the advisor has to look up each bot's schedule, instructions and groups itself to give you "change X from every 30 minutes to every 2 hours" instead of asking you. It only proposes; the main bot makes changes after you approve.
 - **No groups, no schedules:** every group message wakes each member and makes it re-read its whole context. The advisor should cost nothing while idle.
-- **Report only four things:** keeps the main bot's conversation short.
+- **Report only five things:** keeps the main bot's conversation short.
 
 ## Step 2: check the main bot's report
 
@@ -51,7 +53,8 @@ A correct report looks like this:
 | (a) Name | Token Advisor |
 | (b) First line | `# Token Cost Advisor (Grok Bot) — playbook` |
 | (c) Last heading | `## Ground rules` |
-| (d) Version | `bto 0.3.0` (or newer) |
+| (d) Version | `bto 0.4.0` (or newer) |
+| (e) Reads other bots | yes |
 
 **If something does not match, paste this to the main bot:**
 
@@ -60,6 +63,14 @@ A correct report looks like this:
   ```text
   The Token Advisor's instructions are not the full text. Please read adapters/grok-bot/ADVISOR_BOT.en.md from the repo again and set the whole file, unchanged, as its instructions, replacing what is there now. Then report the first line and the last "## " heading.
   ```
+
+- (e) is "no" (the platform does not allow reading other bots): have the main bot write an inventory into the advisor's workspace instead. Do it once now:
+
+  ```text
+  Please write the following to inventory.md in the Token Advisor's workspace, and do not change anything: for every bot, its name; the full text of its instructions; every schedule or automation (interval or times, active hours, time zone); the groups it is in; which bots it notifies and roughly how often; its current chat length if you can see it. Reply only "done" when finished.
+  ```
+
+  Paste the same message again whenever your bots change.
 
 - The clone failed (the main bot cannot reach GitHub): on the GitHub page click **Code → Download ZIP**, upload the zip to the main bot and say:
 
@@ -78,34 +89,35 @@ A correct report looks like this:
 **Open a new chat with the Token Advisor** and paste:
 
 ```text
-Let's do a trial run. In your workspace, run python3 samples/make_grok_export.py to create a sample usage export and treat it as my data. My time zone is +08:00 and I would like to stay under $60 a week. What do you think?
+Let's do a trial run. In your workspace, run python3 samples/make_grok_export.py to create a sample usage export and treat it as my data; the bots' schedules are in samples/grok_schedules.txt, as if you had read them from each bot's settings. My time zone is +08:00. My quota currently runs out in about 3 days and I need it to last 7. What do you recommend?
 ```
 
 **A good answer looks like this** (the sample data is fixed, so the numbers are always the same):
 
-- The first paragraph is the bottom line: about **$80 a week**, **96%** of it in `grok-bot-default` (and it says that bucket mixes several bots), almost all of it spent re-reading context.
-- The actions together save about **$28–57 a week**, enough for the $60 target, with overall confidence stated as **low** and why.
-- The biggest action is "hand over to a fresh chat once a context passes 60,000 tokens".
-- A short table of the top actions, each with dollars and confidence.
-- At most **one** question for you.
+- The first paragraph is the bottom line: about **$158 a week**, and lasting 7 days means getting down to about **$68**; **half of all spend is one bot, monitor** (woken every 30 minutes, re-reading about 110K tokens each time, with **64%** of its checks finding nothing to do).
+- The first recommendation is a concrete change: **monitor from every 30 minutes to every 2 hours**, saving about **$41–59 a week**.
+- A short table of the top changes with dollars and confidence, about **$78–131 a week** together, and where the rest of the gap is and how it will look into it.
+- A **change request ready to paste to the main bot**, and a question whether to send it.
+- At most **one** question, about something only you can decide (e.g. "is noticing an incident up to 2 hours later acceptable?").
 
 **Any of these means it is not following its instructions:**
 
 | Red flag | What it means |
 |---|---|
+| It asks you "which bots are there", "which ones wake most", "what are the schedules" | It hands back what it could look up |
+| Advice like "find the most-woken bot" or "consider fewer wake-ups" | A principle instead of a concrete change |
+| One action split in two (e.g. "stay under 200K" and "hand over at 60K") | Double counting |
 | "Tests passed 78/78", file paths, commands, PASS/FAIL | It is narrating its internal work |
 | "Would you like A, B or C?" | A menu instead of a recommendation |
-| "Calibration failed, so I cannot estimate" | It stops when the data is imperfect |
 | Every message ends with "open a new chat" | Repeated boilerplate |
-| No mention of the 96% bucket | It missed the biggest driver |
 
 If you see a red flag, first tell the Token Advisor:
 
 ```text
-Please re-read your instructions, especially "How you sound" and "How you use numbers", and answer my last question again in that way.
+Please re-read your instructions, especially "The two rules that make you a consultant" and "Fieldwork", and answer my last question again in that way.
 ```
 
-If nothing changes, the instructions were probably rewritten: go back to step 2 and have the main bot set the full text again.
+If nothing changes, the instructions were probably rewritten or are an old version: go back to step 2 and have the main bot set the full text again.
 
 ## Step 4: first real use
 
@@ -114,13 +126,13 @@ If nothing changes, the instructions were probably rewritten: go back to step 2 
 
    ```text
    Attached is the usage export for the last 7 days. My time zone is +08:00.
-   Goal: stay under $____ a week (or: stop hitting the quota).
+   Goal: stay under $____ a week (or: make the quota last 7 days).
    Can't change: ____ (e.g. the main bot must stay, replies must not get slower).
    Please give me the bottom line and the one-page memo.
    ```
 
-3. Read the bottom line and the memo. The one question it asks usually decides the next step (for example "which bots sit inside the default bucket?"); just answer it.
-4. Choose which actions to take, fill in the "Owner" column of the memo, and work through them in the "this week / next week" order.
+3. It first looks up each bot's schedules, instructions and groups by itself, then gives you the bottom line, concrete changes and the one-page memo. Its questions are only about goals, constraints or trade-offs (e.g. "is noticing an incident up to 2 hours later acceptable?").
+4. If the change request looks right, reply "send it" and it hands it to the main bot. You can also pick only some items, or paste it to the main bot yourself.
 
 ## Step 5: everyday use
 
@@ -171,7 +183,7 @@ Ask the main bot to list the advisor's groups, schedules and automations, and re
 Better not. Every group message makes it re-read its whole context, so you would be paying a consultant to sit in on every meeting. Hand it an export when you need it: same result, close to zero cost.
 
 **It says "Automation ID is empty, grouping by model". What does that mean?**
-The Grok Bot export usually cannot tell which bot spent the money, only which model was used (e.g. `grok-bot-default`). The dollars are right, but one bucket mixes several bots. For a per-bot split, export each bot separately, or run recurring work as named automations.
+The Grok Bot export usually cannot tell which bot spent the money, only which model was used (e.g. `grok-bot-default`). The advisor splits that bucket itself: scheduled bots wake at known times, so it matches each bot's schedule against the wake-up times in the export. What is left is your own messages and bot-to-bot pings, which it maps from who notifies whom.
 
 **Are the dollars a real bill?**
 Not on plan billing (the export shows Included / Free). They are token-priced equivalents, useful for comparing options and as a measure of quota burn.
