@@ -30,7 +30,7 @@ Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Inp
 ```
 
 ```bash
-python3 core/cli.py report usage-events.csv --platform grok-bot --tz +08:00 --goal-usd-week 300 \
+python3 core/cli.py report usage-events.csv --platform grok-bot --tz +08:00 --quota-days 3 \
     --schedules schedules.txt --out memo.md --lang zh-TW
 ```
 
@@ -50,3 +50,15 @@ python3 core/cli.py analyze usage.csv --platform grok-bot \
 ```
 
 如果快取 token 不包含在 input 欄位內，加上 `--cached-separate`。確認報告中的「模型校正」誤差在 ±15% 內，再用模型推估改組效果。
+
+## 檢視組織
+
+要找出冗員、合併與拆分：
+
+```bash
+python3 core/cli.py report usage-events.csv --schedules schedules.txt --tz +08:00 --org-out org.json
+# 在 org.json 補上誰通知誰（links）、群組與 keep 標記，然後：
+python3 core/cli.py redesign org.json --platform grok-bot --keep main-bot --out after.txt --lang zh-TW
+```
+
+顧問會自己完成這些步驟：從各 bot 的設定讀出溝通關係，把審查、核准角色和你點名的 bot 標為 `keep`，逐項把關合併，最後交回目前與建議的組織圖和變更請求（[範例](../../docs/sample-redesign.zh-TW.md)）。

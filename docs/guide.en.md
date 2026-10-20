@@ -8,13 +8,15 @@ Every formula and number here is computed by the tested scripts in `core/` and c
 
 ## Summary
 
-The five things to do first:
+The things to do first:
 
 1. Ban pure acknowledgements ("got it", "OK") and batch notifications. Each acknowledgement makes the receiver re-read its whole context.
 2. Remove leaders that only forward messages. A leader is worth having only if it compresses several results into one summary before passing it up.
 3. Send long content one-to-one or through shared files; keep group chats to one-line status updates.
 4. Hand over to a fresh chat on a schedule, using the reset threshold. Start with the chief: it has the largest C and is woken most often.
-5. Export a usage CSV every week and let the advisor bot check whether the changes worked.
+5. Poll less: a scheduled bot that usually finds nothing should run less often, or be pinged when something happens.
+6. Let the formula find redundant bots: retire pure relays, merge bots that only pass work back and forth (`bto redesign`).
+7. Export a usage CSV every week and let the advisor bot check whether the changes worked.
 
 ## Cost model
 
@@ -204,11 +206,11 @@ If a bot's value lies mainly in long, unwritten memory (for example a customer h
 A usage CSV gives the model real parameters. Only when the model reproduces your actual cost within ±15% should you use it to predict the effect of a redesign.
 
 1. Export a usage CSV from your bot platform, ideally covering at least 7 days and all bots.
-2. Run `bto report usage.csv --platform grok-bot --tz +08:00 [--goal-usd-week N]` for the one-page memo: bottom line, where the money goes, ranked actions, data gaps, KPIs with a check date ([example](sample-memo.en.md)).
+2. Run `bto report usage.csv --platform grok-bot --tz +08:00 [--schedules schedules.txt] [--quota-days N | --goal-usd-week N]` for the one-page memo: bottom line, who costs what, ranked changes, data gaps, KPIs with a check date and a change request ([example](sample-memo-grok.en.md)).
 3. For the per-context detail, run `bto analyze usage.csv --platform grok-bot --org-out org.json`: it maps columns automatically and computes, per context, wake-ups, calls per wake-up, current C, daily growth and cache hit rate. `bto trend` shows spend per day and a same-window comparison with the day before.
 4. Check the "model calibration" error. Above ±15%, rely on the measured findings; the usual causes are mixed chats, an unsuitable wake-up gap or non-linear growth.
-5. Add who talks to whom (edit org.json, or describe the team in org.txt / with `bto init`) and run `bto org` for a diagnosis.
-6. Write redesign options and compare total cost with `bto compare`.
+5. Add who talks to whom (start from `bto report --org-out org.json`, or describe the team in org.txt / with `bto init`) and run `bto org` for a diagnosis.
+6. Run `bto redesign` for redundant bots, merges, splits and the new org chart; compare options you write yourself with `bto compare`.
 7. Export the same window again after the changes and re-run the report to confirm the effect.
 
 Detection rules (all heuristics; check them against the actual conversations):
@@ -235,10 +237,11 @@ Three details make the measurements trustworthy:
 `bto report` turns the analysis into recommendations a client can act on:
 
 - **Cost anatomy.** Spend is split into uncached input, cached input, output and the long-context premium. On most teams over 90% is re-reading context, which points at fewer wake-ups and smaller contexts rather than shorter answers.
-- **Evidence tiers.** *Measured*: dollars already spent on a removable pattern in the export (acknowledgement wake-ups, board-first calls, cache misses inside a wake-up, the long-context premium); the range is removing half to all of it. *Modeled*: the hand-over policy, priced with the reset model (`bto reset`); a context handed over at threshold $T$ averages about $(C_{\text{fresh}} + T)/2$. Trusted when calibration is within ±15%. *Judgment*: the sensitivity of the biggest bucket to 10–30% fewer wake-ups, kept out of the total.
+- **Evidence tiers.** *Measured*: dollars already spent on a removable pattern in the export (acknowledgement wake-ups, board-first calls, cache misses inside a wake-up, the long-context premium); the range is removing half to all of it. *Modeled*: the hand-over policy, priced with the reset model (`bto reset`); a context handed over at threshold $T$ averages about $(C_{\text{fresh}} + T)/2$ and needs $G/(T - C_{\text{fresh}})$ hand-overs a week for growth $G$, each costing one rebuild. Every threshold from 40K to 150K is priced for every context, and each gets the one that saves most within a weekly limit (7 by default); a context that cannot stay within it becomes a priced decision. Trusted when calibration is within ±15%. *Judgment*: the sensitivity of the biggest bucket to 10–30% fewer wake-ups, kept out of the total.
 - **Ranking.** Actions are ordered by dollars × confidence ÷ effort; anything under 1% of weekly spend is dropped. The combined saving counts each dollar once (a hand-over absorbs the long-context premium of the same context).
 - **What changed.** Same-window comparison (today so far vs the same hours yesterday, in your time zone) and first-half vs second-half per context: dollars, wake-ups and average context, so you can tell "woken more often" from "reading more each time".
 - **Automatic summarization.** A context that keeps resetting between two similar levels (the peaks vary by less than 25%) is flagged as a sawtooth. On Grok Bot this usually means the platform summarizes at a high threshold; a manual hand-over at a lower one saves most of the difference.
+- **Quota days.** `--quota-days 3` (the quota lasts 3 days at this pace) sets the budget to $S \cdot 3/7$ and the memo states how many days the quota lasts after the recommendations; `bto quota` does the same arithmetic for any figures.
 - **Naming the bots inside a bucket.** When the export has no bot id, `--schedules schedules.txt` (one bot per line: `every 30m [08:00-22:00]`, `at 09:00,18:00` or a 5-field `cron`, optionally `in=BUCKET`) matches each fire to the wake-up that starts from 60 s before to 5 min after it, nearest first, one wake-up per fire. Each bot then gets its own $/week, cost per wake-up, context and share of checks that found nothing to do (one call, at most 80 output tokens), and the rest of the bucket is shown as unscheduled traffic. A bot whose checks are mostly idle gets a concrete frequency change: the new interval is the old one ÷ (1 − idle share), rounded up to a round value, and the saving is the measured cost per wake-up × the wake-ups removed. The hand-over is then priced on the wake-ups that remain, so the two are not counted twice. The memo ends the recommendations with one change request for the bot that manages the others.
 - **Data gaps.** Missing bot or chat ids, an empty Automation ID (calls are then grouped by model, e.g. `grok-bot-default`), no cache column, a short export, a calibration error, plan billing. Each comes with its fix and lowers the stated confidence instead of blocking the advice.
 
@@ -277,8 +280,8 @@ The advisor bot is called only when needed and works like a cost consultant, not
 
 | When to call it | What you get | What you provide |
 | --- | --- | --- |
-| Usage burning too fast | A three-sentence bottom line, the top actions with $/week, confidence and effort, and the one-page memo | A usage export, your time zone, a weekly budget if you have one |
-| Planning a reorg | Before/after comparison of 1–2 options, with the trade-offs and a reconciliation against measured spend | Your bots and how they communicate |
+| Usage burning too fast | A three-sentence bottom line naming the costliest bot, concrete changes with $/week and confidence, how many days the quota will last, the one-page memo and a change request | A usage export, your time zone, and the goal (a weekly budget, or how many days the quota must last) |
+| Planning a reorg | Redundant bots, merges and splits with their savings, the current and proposed org charts, and a change request | Nothing beyond the export: it reads who talks to whom itself |
 | "What if" questions | The answer first, then the number from the matching tool and the assumption that matters | A few parameters, e.g. C and wake-ups per day |
 
 How it works: it investigates before it asks (schedules, instructions, groups, who notifies whom) and asks you only about goals, constraints and approval; every recommendation names the bot, the current and the proposed setting, and comes as a request the managing bot can execute; answer first in dollars per week; plain words; no internal plumbing (tests, paths, commands) in the answer; recommendations instead of menus, with at most one question; every figure labeled measured, modeled or judgment; the biggest driver raised even if you asked about something else; KPIs with a check date; and the fresh-chat reminder once, at the end.

@@ -30,7 +30,7 @@ Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Inp
 ```
 
 ```bash
-python3 core/cli.py report usage-events.csv --platform grok-bot --tz +08:00 --goal-usd-week 300 \
+python3 core/cli.py report usage-events.csv --platform grok-bot --tz +08:00 --quota-days 3 \
     --schedules schedules.txt --out memo.md
 ```
 
@@ -50,3 +50,15 @@ python3 core/cli.py analyze usage.csv --platform grok-bot \
 ```
 
 If cached tokens are not included in the input column, add `--cached-separate`. Make sure the "model calibration" error in the report is within ±15% before using the model to predict the effect of a redesign.
+
+## Reviewing the organization
+
+To find redundant bots, merges and splits:
+
+```bash
+python3 core/cli.py report usage-events.csv --schedules schedules.txt --tz +08:00 --org-out org.json
+# add who notifies whom (links), groups and keep flags to org.json, then:
+python3 core/cli.py redesign org.json --platform grok-bot --keep main-bot --out after.txt
+```
+
+The advisor does this itself: it reads the links from the bots' settings, marks reviewers, approvers and anything you named as `keep`, vets every merge, and returns the current and proposed org charts with a change request ([sample](../../docs/sample-redesign.en.md)).

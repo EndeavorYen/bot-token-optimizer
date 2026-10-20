@@ -14,7 +14,7 @@
   <img alt="MIT 授權" src="https://img.shields.io/badge/license-MIT-F2A541">
 </p>
 
-**bot-token-optimizer** 找出一群常駐 bot 把 token 花在哪裡，並告訴你怎麼止血。它讀取你的用量匯出檔，模擬 bot 之間如何互相喚醒，再依省錢多寡排出該做的改變：公式可以檢查、數字可以重現，給 bot 的指令可以直接貼上。
+**bot-token-optimizer** 找出一群常駐 bot 把 token 花在哪裡，並告訴你怎麼止血。它讀取你的用量匯出檔，點名每一筆花費背後的 bot（即使匯出檔分不出來），模擬 bot 之間如何互相喚醒，再整理成一份計畫：要改哪個 bot、從什麼改成什麼、能省多少，以及組織應該長什麼樣子。每個數字都來自可以檢查的公式、可以重現的計算，每項變更都整理成可以直接貼給 bot 的請求。
 
 > **一句話看懂**
 >
@@ -38,6 +38,8 @@
 - [成本模型](#成本模型)
 - [改完之後長什麼樣子](#改完之後長什麼樣子)
 - [運作方式](#運作方式)
+- [從用量匯出到計畫](#從用量匯出到計畫)
+- [組織改造](#組織改造)
 - [快速開始](#快速開始)
 - [顧問 bot](#顧問-bot)
 - [價格與平台設定](#價格與平台設定)
@@ -52,6 +54,8 @@
 | 「寫到 board，再通知」 | 每則通知最多 **2.00 倍** token | [讀 board 的來回](#讀-board-的來回) |
 | 「OK」「收到」回覆 | 每一則都讓接收方**完整重讀一次上下文** | [成本模型](#成本模型) |
 | 從不開新的 chat | 14 天成本是「到 90K 就交接」的 **3 倍** | [交接](#交接) |
+| 每 30 分鐘輪詢一次、通常什麼都沒有的 bot | 在合成匯出中占全部花費的一半；改成每 2 小時，**每週省 $41–59** | [從匯出到計畫](#從用量匯出到計畫) |
+| 鏈中有轉話的 bot、兩個 bot 互相傳草稿 | 公式拿掉一個、合併另一個：加上指令調整後為 **0.51 倍** | [組織改造](#組織改造) |
 | 以上全部改掉（範例團隊） | **每週 $257 → $23，0.09 倍** | [改組結果](#改完之後長什麼樣子) |
 
 數字由 [`core/`](core/) 的模型對 [`samples/`](samples/) 範例資料模擬而得，每次修改都會由 CI 重新產生。
@@ -67,6 +71,8 @@
 - [ ] 有些 bot 已經在同一個 chat 裡跑了好幾週。
 - [ ] 有個所有 bot 都在裡面貼進度的群組。
 - [ ] 有個主管 bot 要讀每個人的完整報告。
+- [ ] 排程 bot 每幾分鐘就醒來一次，大多時候什麼事都沒有。
+- [ ] 額度總是在重置前好幾天就用完。
 
 這個專案針對的是**常駐 bot**：長時間運作、會被反覆喚醒、上下文不斷累積。一次性跑完就結束的 agent 任務不會碰到這些成本。
 
@@ -176,19 +182,18 @@ $$
 
 ```mermaid
 flowchart LR
-    A[Usage CSV<br/>從 bot 平台匯出] --> B[bto analyze<br/>依 chat 分開的上下文、成長、<br/>已做過的交接、浪費模式]
-    B --> R[bto report<br/>一頁式備忘錄：結論、<br/>排序的行動、KPI]
-    B --> C{模型誤差<br/>在 ±15% 內？}
-    C -- 是 --> D[org.txt<br/>誰跟誰溝通]
-    C -- 否 --> E[只採用實測發現]
-    D --> F[bto org<br/>診斷與預估省量]
-    F --> G[bto compare<br/>比較改組前後]
-    G --> H[執行改善，<br/>一週後再匯出驗證]
+    A[用量匯出檔<br/>從 bot 平台匯出] --> R[bto report<br/>誰花了多少、排序的變更、<br/>額度天數、KPI]
+    S[schedules.txt<br/>從各 bot 設定讀出] --> R
+    R --> M[一頁式備忘錄<br/>＋變更請求]
+    R --> O[org.json<br/>量到的上下文<br/>＋誰跟誰溝通]
+    O --> D[bto redesign<br/>冗員、合併、拆分、<br/>新的組織圖]
+    D --> M
+    M --> H[你同意後由主 bot 執行，<br/>一週後再匯出驗證]
 ```
 
 分析器把**每個 chat 視為獨立的上下文**，會偵測**你已經做過的交接**（上下文突然變小），避免它們扭曲成長速度，而且 **output 與推理 token** 也一起計價。接著它用你的真實花費校正模型；只有在模型能把實際花費重現到 ±15% 以內時，它對改組方案的預測才值得參考。`bto report` 會把這些整理成一頁式備忘錄：以每週美元表示的結論、標明實測／模型／判斷的排序行動、資料缺口與補法，可直接貼給管理 bot 的那個 bot 的變更請求，以及有檢查日的 KPI（[範例](docs/sample-memo-grok.zh-TW.md)）。匯出檔分不出 bot 時，`--schedules` 會把每個 bot 的排程和喚醒時間對起來，點名是誰。
 
-診斷結果長這樣（節錄）：
+`bto org` 診斷你描述的團隊，`bto compare` 驗證你自己寫的改組方案。診斷結果長這樣（節錄）：
 
 ```text
 $ bto org samples/org_before.txt --platform grok-bot --lang zh-TW
@@ -208,6 +213,58 @@ $ bto org samples/org_before.txt --platform grok-bot --lang zh-TW
 3. [board_tool_read] researcher：被通知後用 tool 讀 board，每次通知多一輪完整上下文。…
 ```
 
+## 從用量匯出到計畫
+
+`bto report` 讀取匯出檔，寫出一頁式備忘錄：以每週美元表示的結論、誰花了多少、排好序的變更、資料缺口與補法、有檢查日的 KPI，以及一則給管理 bot 的變更請求。以 [`samples/`](samples/) 的合成 Grok 匯出檔、條件「額度 3 天用完，要撐 7 天」為例（[完整備忘錄](docs/sample-memo-grok.zh-TW.md)）：
+
+> 1. 照目前的速度，你的 bot 每週約花 **$158**。額度約 3 天用完；要撐滿 7 天，得降到每週約 **$68**。
+> 2. 98% 的花費是在重讀上下文，而不是產出內容。光是 **monitor** 一個 bot 就占全部花費的 50%（排程：every 30m）。
+> 3. 建議每週約可省 **$72–120**，每一塊錢只算一次；做完之後額度約可撐 **5.5–12.4 天**。
+
+| 變更 | 每週可省 | 依據 |
+| --- | --- | --- |
+| monitor：每 30 分鐘 → 每 2 小時（64% 的檢查無事可做） | $41–59 | 實測 |
+| 交接到新 chat：monitor 和 digest 到 4 萬 token、其他到 10 萬 | $25–50 | 模型 |
+| heartbeat：每 1 小時 → 每 3 小時 | $2 | 實測 |
+
+每個數字是怎麼來的：
+
+- **點名 bot。** Grok 的匯出檔沒有 bot 編號，只能依模型分組。但排程 bot 會在固定時間醒來：在排程觸發前 60 秒到觸發後 5 分鐘內開始的喚醒，就歸給該排程，距離最近者優先，每次觸發只對一個喚醒。於是每個 bot 都有自己的花費、每次喚醒成本、上下文，以及無事可做的比例（只呼叫一次、輸出 ≤ 80 token）。剩下的是非排程流量。
+- **減少排程檢查。** 無事可做比例為 $u$ 時，新間隔 = 舊間隔 $\div (1-u)$，再取整到常用的間隔；省量 = 實測每次喚醒成本 × 減少的喚醒次數。
+- **交接門檻。** 對每個上下文、每個從 4 萬到 15 萬的門檻 $T$，設新 chat 從 $C_f$ 開始、每週成長 $G$ token：
+
+$$
+n_T = \frac{G}{T - C_f}, \qquad \text{省量}_T = W R\,p\,\Big(C - \frac{C_f + T}{2}\Big) - n_T \cdot \text{重建成本}
+$$
+
+  每個上下文會在每週交接 $n_T \le 7$ 次（可調整）的前提下，選最省的 $T$。怎麼設都超過上限的上下文，會列成一個附金額的決定，絕不默默放棄。
+- **額度天數。** 每週花費 $S$、額度可撐 $d$ 天時，額度約等於 $Q = S\,d/7$。要撐 $d^{*}$ 天，需要 $S \le 7Q/d^{*}$；省下 $\Delta S$ 之後可撐 $7Q/(S - \Delta S)$ 天。`bto quota` 可以對任何數字做同樣的計算。
+- **每一塊錢只算一次。** 交接用改完排程後剩下的喚醒來計價；無事可做的檢查不會再被當成確認訊息重算；快取的省量會隨上下文縮小而減少。實測、模型、判斷的數字都會標明；判斷的區間不計入總數。
+
+## 組織改造
+
+`bto redesign org.txt` 替同一批 bot 尋找更省的組織。它一次試一項變更，保留最省的那一項，直到沒有任何變更能省下總成本 2% 以上：
+
+| 變更 | 什麼時候會試 | 公式比較什麼 |
+| --- | --- | --- |
+| 取消確認訊息、內容放進訊息、群組只貼一行狀態 | 一律 | 省掉的喚醒與 board 讀取 |
+| **拿掉**某個 bot | 只有一個上游、一個下游，沒有自己的工具工作或喚醒，往下傳的和收到的差不多 | 不再有人讀它的上下文，交接改成直接 |
+| **合併**兩個 bot | 兩者互相交接，或同一個主管 | 少一份上下文、少了交接造成的喚醒，對上每次喚醒都要讀的較大上下文（兩份基礎設定都保留、每天的工作量不變） |
+| **拆開**某個 bot | 它服務三個以上的來源 | 兩個較小的上下文，對上每天兩次互換簡短摘要 |
+| **加入 leader** | 主管的直屬回報超過控制幅度 | 用 $k^{*}$ 決定每組大小，每個 leader 每一輪只交一份摘要 |
+
+比較是公平的：看四週、所有結構都用同一個交接策略，而且每個會循環交接的上下文都從新 chat 開始。標記 `keep` 的 bot 不會被拿掉或併入別人。以範例團隊為例（[完整輸出](docs/sample-redesign.zh-TW.md)），保留 chief 和 reviewer：指令調整讓每週從 $62.87 降到 $36.39；再拿掉只轉話的 **lead**、把 **writer** 併入 **researcher**，降到 **$32.33（0.51 倍）**：
+
+```mermaid
+flowchart LR
+    chief["chief<br/>100K · $9/wk"] -->|"6/d · 2,700"| researcher["researcher（＋writer）<br/>60K · $19/wk"]
+    researcher -->|"6/d · 120"| reviewer["reviewer<br/>25K · $7/wk"]
+    reviewer -->|"6/d · 1,500"| chief
+    g(["群組 all-hands<br/>8/d · 60"]) -.- chief & researcher & reviewer
+```
+
+公式看不出兩份工作適不適合放在一起，所以每項合併都附檢查提醒：需要相同的工具與權限，而且彼此不互相審查。顧問會先逐項把關才提出。`bto report --org-out` 會依量到的上下文與具名 bot 寫出骨架，可以從它開始。因為每個方案都在交接策略下比較，改組的基準會比 `bto org`（假設上下文從不重置）低。
+
 ## 快速開始
 
 ```bash
@@ -219,14 +276,16 @@ bto --help
 
 | 想做的事 | 指令 |
 | --- | --- |
-| 一頁式備忘錄：錢花在哪、先做什麼 | `bto report usage.csv --platform grok-bot --tz +08:00 --goal-usd-week 300` |
+| 一頁式備忘錄：錢花在哪、先改什麼 | `bto report usage.csv --platform grok-bot --tz +08:00 --quota-days 3` |
 | 依排程點名分組裡的 bot | `bto report usage.csv --schedules schedules.txt --tz +08:00` |
+| 預算與額度天數（任何數字都可以算） | `bto quota --week-usd 2536 --days-now 3 --save 560 630` |
 | 每日花費與最近的變化 | `bto trend usage.csv --tz +08:00` |
-| 逐上下文明細與組織骨架 | `bto analyze usage.csv --platform grok-bot --org-out org.json` |
+| 逐上下文明細 | `bto analyze usage.csv --platform grok-bot` |
+| 量到的上下文與具名 bot 的組織骨架 | `bto report usage.csv --schedules schedules.txt --org-out org.json` |
 | 用問答描述你的團隊 | `bto init` |
 | 診斷團隊 | `bto org org.txt --platform grok-bot` |
-| 誰是冗員、該合併或拆開什麼、最佳組織圖 | `bto redesign org.txt --keep chief` |
-| 比較改組方案 | `bto compare org.txt org_redesign.txt` |
+| 誰是冗員、該合併或拆開什麼、最佳組織圖 | `bto redesign org.txt --keep chief --out after.txt` |
+| 比較你自己寫的改組方案 | `bto compare org.txt org_redesign.txt` |
 | 讀 board 的來回值不值得？ | `bto board --k 1` |
 | 一個主管該帶幾個？ | `bto span --n 12 --c0 30000 --m 1000` |
 | 該開新的 chat 了嗎？ | `bto reset --c 150000 --c-base 8000` |
@@ -235,8 +294,8 @@ bto --help
 報告支援英文與繁體中文（`--lang en|zh-TW`；預設依 `BTO_LANG`，再依系統語系）。一個團隊只要幾行 `org.txt`：
 
 ```text
-settings horizon=7 soft_cap=120k
-bot chief      100k base=8k wakes=3 rounds=1
+settings horizon=7 soft_cap=120k handover_at=60k
+bot chief      100k base=8k wakes=3 rounds=1 keep
 bot researcher 30k  rounds=3 board
 bot writer     30k  rounds=2
 chief -> researcher : 6/day 800
@@ -245,7 +304,7 @@ writer -> researcher : 6/day 15        # 「收到」回覆
 group team : chief researcher writer : 10/day 900
 ```
 
-寫錯時會一次列出所有問題並標明行號。CSV 欄位會自動辨識（`timestamp`、`bot_name`、`chat_id`、`input_tokens`、`cached_input_tokens`、`output_tokens`、`reasoning_tokens`、`cost_usd` 等）；其他名稱用 `--map time=日期 --map bot=Bot` 指定。
+`keep` 標記不能被拿掉或併入別人的 bot；`handover_at` 讓團隊在某個交接策略下評估。排程檔一樣簡短：`monitor every 30m`、`digest at 09:00,18:00`、`sync cron */15 9-18 * * 1-5`。寫錯時會一次列出所有問題並標明行號。CSV 欄位會自動辨識（`timestamp`、`bot_name`、`chat_id`、`input_tokens`、`cached_input_tokens`、`output_tokens`、`reasoning_tokens`、`cost_usd` 等）；其他名稱用 `--map time=日期 --map bot=Bot` 指定。
 
 ## 顧問 bot
 
@@ -280,9 +339,9 @@ Grok Bot 的設定方式：[手把手教學](adapters/grok-bot/SETUP.zh-TW.md)�
 
 | 檢查 | 保證什麼 |
 | --- | --- |
-| 53 項單元測試 | README 與指引中的每條公式、每張表，都能從手算值重現 |
+| 105 項單元測試 | README 與指引中的每條公式、每張表，都能從手算值重現；顧問建立教學裡引用的標準答案也由測試檢查 |
 | 1,083 項一致性檢查 | 網頁計算器的結果與 Python 模型完全一致；在 192 種回答組合下，計算器的任何改善都不會讓帳單變高 |
-| CI 重新產生圖表 | 每次推送都依模型重新產生所有圖表，圖表過期時 CI 會失敗 |
+| CI 重新產生圖表與範例 | 每次推送都重新產生所有圖表、範例備忘錄與範例改組，任何一個過期時 CI 會失敗 |
 | 校正 | `bto analyze` 重現合成範例實際花費的誤差為 2.1%；用在你的資料上時會回報誤差，讓你自行判斷 |
 | Shapley 歸因 | 節省拆解的加總恰好等於總節省，而且與改變的套用順序無關 |
 
@@ -313,6 +372,18 @@ Grok Bot 的設定方式：[手把手教學](adapters/grok-bot/SETUP.zh-TW.md)�
 </details>
 
 <details>
+<summary><b>我的匯出檔分不出是哪個 bot。</b></summary>
+
+Grok Bot 很常見，因為 Automation ID 常是空的。把每個 bot 的排程寫進排程檔，執行 `bto report --schedules`：排程造成的喚醒會依時間對回各自的 bot，剩下的列為非排程流量（你的訊息與 bot 之間的通知）。顧問 bot 會自己從各 bot 的設定讀出排程。
+</details>
+
+<details>
+<summary><b>它會修改或刪除我的 bot 嗎？</b></summary>
+
+不會。工具只做計算。顧問 bot 會讀取其他 bot 的設定，但從不修改：它寫出變更請求，由管理其他 bot 的那個 bot 在你同意後執行。要拿掉的 bot 會先暫停，不會刪除。
+</details>
+
+<details>
 <summary><b>我的 CSV 會被傳到別的地方嗎？</b></summary>
 
 不會。所有計算都在本機執行，沒有任何網路連線；網頁計算器也完全在你的瀏覽器裡運算。
@@ -320,7 +391,7 @@ Grok Bot 的設定方式：[手把手教學](adapters/grok-bot/SETUP.zh-TW.md)�
 
 ## 限制
 
-模型提供的是方向和量級，不是精確帳單。它假設每輪呼叫都重讀完整上下文，並把兩次交接之間的成長視為線性。它沒有把長上下文與交接造成的品質損失算進去，也沒有計入部分廠商額外收取的快取寫入費用。目前的校正只用過合成資料。Grok Bot 的 usage-events 匯出檔可以直接讀，但沒有 chat 編號，Automation ID 也常是空的，所以會依模型分組（一組裡有好幾個 bot），報告會相應降低信心。詳見[指引](docs/guide.zh-TW.md#限制與參考文獻)。
+模型提供的是方向和量級，不是精確帳單。它假設每輪呼叫都重讀完整上下文，並把兩次交接之間的成長視為線性。它沒有把長上下文與交接造成的品質損失算進去，也沒有計入部分廠商額外收取的快取寫入費用。目前的校正只用過合成資料。Grok Bot 的 usage-events 匯出檔可以直接讀，但沒有 chat 編號，Automation ID 也常是空的，所以會依模型分組；排程可以點名排程 bot，非排程流量則仍是混合的，它的成長（以及交接次數）是偏低的估計。對上次數和巧合差不多的排程會被標示。組織改造的搜尋是逐步貪婪法，而且只看成本：兩份工作能不能放進同一個 bot，要由人決定。詳見[指引](docs/guide.zh-TW.md#限制與參考文獻)。
 
 ## Repo 結構
 
@@ -333,9 +404,10 @@ docs/guide.zh-TW.md         完整指引：模型、公式、架構決策、反�
 docs/advisor-demo.zh-TW.md  一次諮詢的完整範例（實際輸出）
 docs/sample-memo*.zh-TW.md  `bto report` 產出的一頁式備忘錄（由 make_memos.py 產生）
 docs/sample-redesign.zh-TW.md  `bto redesign` 對範例團隊的改組建議
+docs/make_memos.py          重新產生範例備忘錄與範例改組（CI 會檢查）
 docs/calculator/            網頁計算器（GitHub Pages），與 Python 模型交叉驗證
 docs/images/                圖表，由 make_figures.py 依模型產生
-samples/                    範例團隊、示範團隊、合成的 usage CSV 與 Grok 匯出檔產生器
+samples/                    範例團隊、示範團隊、合成的 usage CSV、Grok 匯出檔產生器與其排程檔
 tests/                      單元測試與計算器一致性檢查
 ```
 
