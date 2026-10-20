@@ -1,28 +1,30 @@
 # Grok Bot adapter
 
-在 Grok Bot 建立一個「Token 最佳化顧問」，用量暴增或想調整 bot 分工時呼叫它。
+**English** · [繁體中文](README.zh-TW.md)
 
-## 平台限制（platform.json）
+Set up a "Token Advisor" inside Grok Bot and call it when usage spikes or before you change how your bots divide work.
 
-- 一個群組最多 6 個 Bot，所以控制幅度上限為 6。
-- 使用者無法改寫 Bot 的上下文。能用的槓桿是：溝通管道（一對一或群組）、用程式寫檔、減少喚醒、開新 chat 交接。
-- usage CSV 由使用者從 Grok Bot 匯出後上傳給顧問 bot。
+## Platform limits (platform.json)
 
-## 建立顧問 bot
+- A group holds at most 6 bots, so the span limit is 6.
+- Users cannot rewrite a bot's context. The levers available are: communication channel (one-to-one or group), writing data to files with code, fewer wake-ups, and handing over to a fresh chat.
+- The usage CSV is exported from Grok Bot by the user and uploaded to the advisor bot.
 
-1. 在 Grok Bot 新增一個 Bot，例如「Token 顧問」。
-2. 把 `ADVISOR_BOT.md` 的內容設為它的指令。
-3. 把整個 repo 放進它可存取的工作區（例如請它 clone 這個 repo）。
-4. 第一次使用時請它執行 `python3 -m unittest discover -s tests`，確認全部通過。
-5. 之後只在需要時呼叫，例如「這週用量暴增，幫我看這份 CSV」或「我想把 leader 拿掉，幫我算算看」。每次諮詢建議開新 chat。
+## Create the advisor bot
 
-## 第一次使用真實 CSV
+1. Add a new Bot in Grok Bot, e.g. "Token Advisor".
+2. Set the contents of [`ADVISOR_BOT.en.md`](ADVISOR_BOT.en.md) as its instructions ([`ADVISOR_BOT.zh-TW.md`](ADVISOR_BOT.zh-TW.md) for Chinese).
+3. Put the whole repo where the bot can access it (e.g. ask it to clone this repo).
+4. On first use, ask it to run `python3 -m unittest discover -s tests` and confirm everything passes.
+5. Call it only when needed, e.g. "usage exploded this week, look at this CSV" or "I want to remove the leader, run the numbers". Start a fresh chat for each consultation.
 
-分析器會自動辨識常見欄名（timestamp、bot_name、input_tokens、cached_input_tokens、output_tokens、reasoning_tokens、cost_usd 等）。Grok Bot 匯出檔的實際欄名尚未驗證，對不上時用 `--map`：
+## Your first real CSV
+
+The analyzer recognizes common column names (timestamp, bot_name, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, cost_usd, …). The column names in Grok Bot's export have not been verified yet; if they do not match, use `--map`:
 
 ```bash
 python3 core/analyze_usage.py usage.csv --platform adapters/grok-bot/platform.json \
-  --map time=<時間欄> --map bot=<Bot 欄> --map input=<input token 欄>
+  --map time=<time column> --map bot=<bot column> --map input=<input-token column>
 ```
 
-如果快取 token 不包含在 input 欄位內，加上 `--cached-separate`。確認報告中的「模型校正」誤差在 ±15% 內，再用模型推估改組效果。
+If cached tokens are not included in the input column, add `--cached-separate`. Make sure the "model calibration" error in the report is within ±15% before using the model to predict the effect of a redesign.

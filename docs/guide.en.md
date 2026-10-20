@@ -1,0 +1,237 @@
+# Bot Token Optimization Guide
+
+**English** · [繁體中文](guide.zh-TW.md)
+
+In a multi-bot system, cost is roughly "wake-ups × calls per wake-up × context C". The most effective fixes reduce wake-ups and shrink C. Shortening the messages themselves helps very little.
+
+Every formula and number here is computed by the tested scripts in `core/` and can be reproduced with `python3 core/orgopt.py`. Platform limits and prices in the examples are Grok Bot's; substitute your own for other bot platforms.
+
+## Summary
+
+The five things to do first:
+
+1. Ban pure acknowledgements ("got it", "OK") and batch notifications. Each acknowledgement makes the receiver re-read its whole context.
+2. Remove leaders that only forward messages. A leader is worth having only if it compresses several results into one summary before passing it up.
+3. Send long content one-to-one or through shared files; keep group chats to one-line status updates.
+4. Hand over to a fresh chat on a schedule, using the reset threshold. Start with the chief: it has the largest C and is woken most often.
+5. Export a usage CSV every week and let the advisor bot check whether the changes worked.
+
+## Cost model
+
+Every call to a bot re-reads its entire context C, so cost is the product of wake-ups, calls per wake-up, and C.
+
+```math
+\text{cost} \approx \sum_{\text{bot}} W \times R \times C \times p, \qquad p = h \cdot r + (1 - h)
+```
+
+- W: wake-ups per day; R: calls per wake-up (1 + tool-call rounds for the bot's own work)
+- C: current context size. It keeps growing with every message received, everything read in, and the bot's own output, until the bot hands over to a fresh context
+- p: price factor. h is the cache hit rate, r is the cached price as a fraction of the full price
+- Once the prompt reaches 200K, the whole request is billed at the long-context price, i.e. double
+
+| Price (grok-4.7, per million tokens) | input | cached input | output |
+| --- | --- | --- | --- |
+| prompt under 200K | $2.00 | $0.50 | $6.00 |
+| prompt 200K or more | $4.00 | $1.00 | $12.00 |
+
+Source: [mem0 Grok API pricing summary](https://mem0.ai/library/llms-and-models/xai-grok-api-pricing) (checked 2026-10). Price presets live in `pricing/` and can be updated anytime. If your platform is subscription-based, dollar figures are cost equivalents for comparing options.
+
+Three consequences follow directly:
+
+- A message of length m is usually tiny next to C, so shortening messages helps little. Fewer wake-ups and a smaller C are the real levers.
+- An "OK" is a few tokens, yet it makes the receiver pay for a full C.
+- Whatever a bot reads stays in its C. Switching to "write to a board, then let them read it" does not slow the reader's context growth.
+
+## Theory
+
+Four formulas answer four common questions: is a board worth it, is a leader worth it, how many bots per manager, and when to reset.
+
+### Is "write to a board, then ping" worth it?
+
+When the receiver fetches the board with a tool call, every notification costs one extra full read of C. k is the number of tool-call rounds a bot spends on its own work per wake-up.
+
+```math
+\text{write, then notify: } \frac{k+2}{k+1} \qquad \text{write + notify in one step: } 1 + \frac{1}{2(k+1)}
+```
+
+| k | token multiplier (two steps) | token multiplier (one step) | receiver cost multiplier (cache cold on wake-up) |
+| --- | --- | --- | --- |
+| 0 (chatty bot) | 2.00 | 1.50 | 1.25 |
+| 1 | 1.50 | 1.25 | 1.20 |
+| 2 | 1.33 | 1.17 | 1.17 |
+| 4 | 1.20 | 1.10 | 1.13 |
+
+![Write to a board, then ping: up to 2x tokens](images/board-overhead.en.svg)
+
+The multiplier does not depend on message length, only on how much work the bot does per wake-up. A board is valuable for collaboration and persistence, not for saving tokens.
+
+```bash
+python3 core/orgopt.py board --k 1 --mode sequential
+```
+
+### Is a leader worth it?
+
+Assume worker, leader and chief contexts of 30K, 60K and 100K:
+
+| Scenario | Flat | With leader | Multiplier |
+| --- | --- | --- | --- |
+| Single task, leader only forwards | 130K | 250K | 1.92 |
+| 6 parallel subtasks, leader sends one summary up | 780K | 700K | 0.90 |
+
+![A leader that only relays almost doubles the cost](images/relay-leader.en.svg)
+
+A relay leader nearly doubles the cost. A summarizing leader moves wake-ups from the expensive chief to the cheaper leader, and the chief only receives one summary, so every later chief wake-up is cheaper too.
+
+```bash
+python3 core/orgopt.py scenario relay
+python3 core/orgopt.py scenario aggregate --n 6
+```
+
+### How many bots per manager?
+
+Every report wakes the manager once and stays in its context. C0 is the manager's base context, m the length of each report.
+
+```math
+k^{*} \approx 1 + \sqrt{1 + \frac{2 C_0}{m}}
+```
+
+| C0 | report length m | closed form k* | numerical optimum |
+| --- | --- | --- | --- |
+| 30K | 5K (full report) | 4.6 | 5 |
+| 30K | 1K (summary) | 8.8 | 9 |
+| 30K | 200 (one line + file path) | 18.3 | 19 |
+
+![Shorter reports let each manager handle more bots](images/span-of-control.en.svg)
+
+The numerical optimum is computed for 2,000 workers with no cap. The shorter the reports, the more bots one manager can handle and the flatter the organization. Platforms add hard limits, e.g. a Grok Bot group holds at most 6 bots (`adapters/grok-bot/platform.json`).
+
+```bash
+python3 core/orgopt.py --platform adapters/grok-bot/platform.json span --n 12 --c0 30000 --m 1000
+```
+
+### When to hand over to a fresh context
+
+One reset costs roughly one read of C by the old bot to write a hand-over summary, plus the new bot's first read of its new context. Every wake-up after that saves the difference between C and the new context.
+
+```math
+C_{\text{new}} = C_{\text{base}} + H, \qquad \text{break-even wake-ups} = \frac{p \cdot C + 3H + C_{\text{new}}}{R \cdot p \cdot (C - C_{\text{new}})}
+```
+
+H is the hand-over summary length; 3 is the output-to-input price ratio. With an 8K base, a 3K hand-over, 10 wake-ups a day, over one week:
+
+| Current C | break-even wake-ups | one-week net saving (USD equivalent) |
+| --- | --- | --- |
+| 50K | 2.6 | $2.10 |
+| 100K | 1.7 | $4.86 |
+| 150K | 1.4 | $7.62 |
+
+![Context keeps growing until you reset it](images/context-growth.en.svg)
+
+For one bot whose context grows 15K a day with 10 wake-ups a day, never resetting costs about $17.47 over 14 days; handing over at 90K costs about $5.71.
+
+In token terms, a reset pays for itself within two or three wake-ups. The real constraints are the knowledge lost in the hand-over and the manual effort of resetting, so in practice reset on a schedule: hand over before C reaches your quality soft cap or three quarters of the 200K tier. The scripts compute a suggested interval from the measured growth rate.
+
+```bash
+python3 core/orgopt.py reset --c 150000 --c-base 8000 --wakes-per-day 10
+```
+
+## Choosing an architecture
+
+Look at the task structure first, then the head count, and only then decide whether to add a layer.
+
+```mermaid
+flowchart TD
+    A[New work] --> B{Can it split into<br/>parallel subtasks?}
+    B -- no --> C["Single bot<br/>sequential tasks get worse with more bots"]
+    B -- yes --> D{"More workers than the span limit,<br/>or results need merging?"}
+    D -- no --> E["Two tiers: chief + workers<br/>workers hand off directly"]
+    D -- yes --> F["Add a leader<br/>it must compress before passing up"]
+    C --> G[Always: no acknowledgements · long content via files · scheduled hand-overs]
+    E --> G
+    F --> G
+```
+
+In experiments by Google and collaborators, multi-agent setups lowered performance on sequential reasoning tasks by 39% to 70%, while centralized coordination improved parallelizable tasks by 80.9%. That is why the first question is whether the task can run in parallel.
+
+## Practice
+
+Eight anti-patterns account for most of the waste, and each can be fixed directly in your bots' instructions.
+
+| Anti-pattern | How to spot it | Why it is expensive | Fix |
+| --- | --- | --- | --- |
+| Pure acknowledgements | "Got it", "OK": messages of a few tokens | Each makes the receiver re-read its full C | Forbid them in instructions; batch notifications, wake only when action is needed |
+| Relay leader | One upstream, one downstream, passes on about as much as it receives | Two extra wake-ups per task | Let upstream and downstream hand off directly, or make the leader summarize |
+| Polling and routine status reports | Scheduled check-ins, reporting every step | Wakes several bots each time | Notify only at milestones or exceptions |
+| Long content in group chats | Hundreds of tokens per group message | Every message lands in every member's C | Long content one-to-one or via files; one-line status in groups |
+| Notify, then read the board via a tool | The first call of a wake-up produces almost no output | One extra full C per notification | Put small content in the message; for large content, name the section to read |
+| Printing machine output into the chat | Logs, scraped data, test output in the conversation | C balloons and is re-read on every wake-up | Write it to files with code; read only the parts needed |
+| Never resetting | C keeps growing; slower and pricier over time | Every wake-up costs more; past 200K the unit price doubles | Scheduled hand-overs to a fresh chat |
+| Micromanaging chief | The chief has the largest share of cost | Largest C times most wake-ups | Subordinates send summaries; the chief handles exceptions only |
+
+The sample team in `samples/` shows the effect of fixing them:
+
+![Sample redesign: 7-day cost $256 to $25](images/before-after.en.svg)
+
+Two formats you can adopt as-is:
+
+- Hand-off notification: file path + one-line summary + what the receiver should do + which section to read. E.g. "board#42 v7 | API spec final | please implement /auth, only section 3 needed".
+- Hand-over summary before a reset: goal, decisions made, open items, where the key files are. Keep it within about 3K tokens.
+
+## Measuring and calibrating
+
+A usage CSV gives the model real parameters. Only when the model reproduces your actual cost within ±15% should you use it to predict the effect of a redesign.
+
+1. Export a usage CSV from your bot platform, ideally covering at least 3 days and all bots.
+2. Run `core/analyze_usage.py`: it maps columns automatically and computes per-bot wake-ups, calls per wake-up, current C, daily growth and cache hit rate.
+3. Check the "model calibration" error in the report. Above ±15%, use only the measured findings; the usual causes are an unsuitable wake-up gap or non-linear growth.
+4. Add who talks to whom to the generated org.json and run `core/orgopt.py org` for a diagnosis.
+5. Write redesign options and compare total cost with `core/orgopt.py compare`.
+6. Export another CSV a week after the changes to confirm the effect.
+
+Detection rules (all heuristics; check them against the actual conversations):
+
+| Detection | Condition | Matching anti-pattern |
+| --- | --- | --- |
+| Low-output wake-ups | One call with ≤ 30 output tokens, in 15% or more of wake-ups | Pure acknowledgements, wake-ups with nothing to do |
+| Read-then-work | Two or more calls, first call ≤ 80 output tokens, in 30% or more of wake-ups | Notify, then read the board via a tool |
+| Context growth | Trend crosses 200K within 14 days | Never resetting |
+| Long-context billing | Calls already above 200K | Never resetting |
+| Low cache hit rate | Below 50% (at least 10 calls) | Editing early context, long gaps between wake-ups |
+| Cost hotspot | 30% or more of total cost and above 1.5 / number of bots | Micromanaging chief, too many wake-ups |
+
+Wake-ups are estimated by treating consecutive calls from the same bot within 120 seconds as one wake-up; adjust with `--gap`.
+
+## Advisor bot
+
+The advisor bot is called only when needed. Every number comes from the tested scripts; the bot gathers information, interprets the results and recommends changes. The Grok Bot instructions are in `adapters/grok-bot/ADVISOR_BOT.en.md` (Chinese: `ADVISOR_BOT.zh-TW.md`).
+
+| When to call it | What it does | What you provide |
+| --- | --- | --- |
+| Usage burning too fast | Analyzes the CSV, calibrates the model, finds anti-patterns and the most expensive bot, gives the top 3 fixes | A usage CSV and one round of questions about who talks to whom |
+| Planning a reorg | Models the current team and 1–2 options, compares total cost, hotspots and layers with `compare` | Your bots and how they communicate |
+| "What if" questions | Answers with the matching command (board, leader, span, reset) | A few parameters, e.g. C and wake-ups per day |
+
+It follows its own rules: no mental math, no acknowledgement messages, all questions in one round, heuristics clearly labeled, and a suggestion to start a fresh chat next time.
+
+## Limits and references
+
+The model gives direction and magnitude, not an exact bill. Keep these limits in mind:
+
+- It assumes every call re-reads the full C; platforms that compress context automatically will cost less.
+- Context growth is approximated as linear.
+- Quality is not in the cost formula: attention degrades in long contexts and knowledge is lost in hand-overs; judge those separately.
+- Latency is not modeled: every extra layer adds a round of waiting.
+- The Grok Bot usage CSV column names are not yet verified; check the column mapping and calibration error the first time you use a real export.
+- Prices change; estimated savings overlap and cannot simply be added up.
+
+Recent multi-agent research:
+
+- [Towards a Science of Scaling Agent Systems](https://arxiv.org/abs/2512.08296): centralized coordination improves parallelizable tasks by 80.9%; on sequential reasoning tasks multi-agent setups lose 39% to 70%; with centralized coordination errors are amplified 4.4×, with independent agents 17.2×.
+- [AgentPrune (ICLR 2025)](https://proceedings.iclr.cc/paper_files/paper/2025/hash/bbc461518c59a2a8d64e70e2c38c4a0e-Abstract-Conference.html): pruning redundant communication cuts tokens by 28.1% to 72.8%.
+- [AgentSlimming (ACL 2026)](https://preview.aclanthology.org/ingest-acl/2026.acl-long.1387/): removing or replacing redundant agents cuts token cost by up to 78.9%.
+- [OrgAgent](https://arxiv.org/abs/2604.01020): company-style hierarchies generally outperform other organizational structures.
+- [Embodied LLM Agents Learn to Cooperate in Organized Teams](https://arxiv.org/abs/2403.12482): LLM agents tend to over-report and comply with everything; adding organizational structure helps.
+
+Platform and pricing: [xAI Responses API docs](https://docs.x.ai/docs/guides), [Introducing Grok Bot](https://x.ai/news/introducing-grok-bot), [Grok API pricing summary](https://mem0.ai/library/llms-and-models/xai-grok-api-pricing).
+
+Classic organization theory: Williamson (1967) on hierarchical control and optimum firm size, Marschak and Radner (1972) on team theory, Radner (1993) on decentralized information processing, Garicano (2000) on knowledge hierarchies, Simon (1962) on near-decomposability.
