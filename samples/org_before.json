@@ -1,0 +1,24 @@
+{
+  "horizon_days": 7,
+  "handover_tokens": 3000,
+  "quality_soft_cap": 120000,
+  "bots": [
+    {"name": "chief", "context_tokens": 100000, "base_tokens": 8000, "own_wakes_per_day": 3, "work_rounds_per_wake": 1},
+    {"name": "lead", "context_tokens": 60000, "base_tokens": 6000, "work_rounds_per_wake": 0},
+    {"name": "researcher", "context_tokens": 30000, "base_tokens": 5000, "work_rounds_per_wake": 3, "reads_board_via_tool": true},
+    {"name": "writer", "context_tokens": 30000, "base_tokens": 5000, "work_rounds_per_wake": 2, "reads_board_via_tool": true},
+    {"name": "reviewer", "context_tokens": 25000, "base_tokens": 5000, "work_rounds_per_wake": 1}
+  ],
+  "links": [
+    {"from": "chief", "to": "lead", "messages_per_day": 6, "avg_tokens": 800},
+    {"from": "lead", "to": "researcher", "messages_per_day": 6, "avg_tokens": 700},
+    {"from": "researcher", "to": "writer", "messages_per_day": 6, "avg_tokens": 120},
+    {"from": "writer", "to": "reviewer", "messages_per_day": 6, "avg_tokens": 120},
+    {"from": "reviewer", "to": "chief", "messages_per_day": 6, "avg_tokens": 1500},
+    {"from": "writer", "to": "researcher", "messages_per_day": 6, "avg_tokens": 15},
+    {"from": "reviewer", "to": "writer", "messages_per_day": 6, "avg_tokens": 15}
+  ],
+  "groups": [
+    {"name": "all-hands", "members": ["chief", "lead", "researcher", "writer", "reviewer"], "messages_per_day": 10, "avg_tokens": 900}
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "horizon_days": 7,
+  "handover_tokens": 3000,
+  "quality_soft_cap": 120000,
+  "bots": [
+    {"name": "chief", "context_tokens": 20000, "base_tokens": 8000, "own_wakes_per_day": 3, "work_rounds_per_wake": 1},
+    {"name": "researcher", "context_tokens": 15000, "base_tokens": 5000, "work_rounds_per_wake": 3},
+    {"name": "writer", "context_tokens": 15000, "base_tokens": 5000, "work_rounds_per_wake": 2},
+    {"name": "reviewer", "context_tokens": 15000, "base_tokens": 5000, "work_rounds_per_wake": 1}
+  ],
+  "links": [
+    {"from": "chief", "to": "researcher", "messages_per_day": 6, "avg_tokens": 800},
+    {"from": "researcher", "to": "writer", "messages_per_day": 6, "avg_tokens": 1500},
+    {"from": "writer", "to": "reviewer", "messages_per_day": 6, "avg_tokens": 1500},
+    {"from": "reviewer", "to": "chief", "messages_per_day": 2, "avg_tokens": 600}
+  ],
+  "groups": [
+    {"name": "all-hands", "members": ["chief", "researcher", "writer", "reviewer"], "messages_per_day": 10, "avg_tokens": 80}
+  ]
+}
