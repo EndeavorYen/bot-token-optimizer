@@ -4,7 +4,7 @@
 
 1. At the current pace your bots cost about **$158 per week** (≈ $22.61/day), as a token-priced equivalent. At this pace the quota lasts 3 days; lasting 7 days means getting down to about **$68 per week** (57% less).
 2. **98% of it is grok-bot-default**, and 98% of all spend is re-reading context rather than writing output. A single bot, **monitor**, is 50% of all spend (schedule: every 30m).
-3. The recommendations below save about **$72–$120 per week (46%–76%)**, counting each dollar once; with them the quota lasts about **5.5–12.4 days** (target 7).
+3. The recommendations below save about **$72–$119 per week (45%–75%)**, counting each dollar once; with them the quota lasts about **5.5–12.0 days** (target 7).
 
 Overall confidence: **medium**.
 
@@ -48,7 +48,7 @@ Ranked by dollars × confidence ÷ effort. Savings overlap, so they are not simp
 | 1 | **Run monitor every 2h instead of “every 30m”** | 64% of its 317 scheduled wake-ups made one call and wrote almost nothing (nothing to do), yet each re-read about 109,470 tokens for $0.248; it costs $78.70/week | $41.32–$59.02 (measured) | high | low | _to assign_ |
 | 2 | **Hand over to a fresh chat at a set threshold per bot** | every wake-up re-reads the whole context; typical now → threshold: grok-bot-default (unscheduled) 109,084 → 100,000 (≈6.6 hand-overs/week), monitor 109,470 → 40,000 (≈5.8 hand-overs/week), digest 90,978 → 40,000 (≈2.0 hand-overs/week) | $24.91–$49.81 (modeled) | medium | low | _to assign_ |
 | 3 | **Run heartbeat every 3h instead of “every 1h”** | 65% of its 168 scheduled wake-ups made one call and wrote almost nothing (nothing to do), yet each re-read about 30,033 tokens for $0.021; it costs $3.47/week | $1.62–$2.31 (measured) | high | low | _to assign_ |
-| 4 | **Put the content in the notification instead of “go read the board”** | 19 wake-ups (3%) spend a full-context call just to fetch the work; mostly grok-bot-default | $1.96–$3.92 (measured) | medium | low | _to assign_ |
+| 4 | **Put the content in the notification instead of “go read the board”** | 19 wake-ups (3%) spend a full-context call just to fetch the work; mostly grok-bot-default | $1.34–$2.69 (measured) | medium | low | _to assign_ |
 | 5 | **Stop breaking the prompt cache mid-wake-up** | calls after the first one in a wake-up still paid $16.53 for uncached input; mostly grok-bot-default | $2.47–$4.94 (measured) | medium | medium | _to assign_ |
 
 **How**
@@ -87,7 +87,7 @@ Do not change anything else.
 ## Decisions and data needed
 
 - 44% of spend ($70/week) in grok-bot-default is unscheduled: your messages and bot-to-bot pings. Next analysis step: map who pings whom (org.txt) and run bto org to see which links cost the most.
-- Reaching $68/week needs about $18/week beyond these actions: choose between fewer wake-ups of grok-bot-default (unscheduled) (about 26% fewer) and a higher budget.
+- Reaching $68/week needs about $19/week beyond these actions: choose between fewer wake-ups of grok-bot-default (unscheduled) (about 27% fewer) and a higher budget.
 - 100% of calls have no Automation ID, so they are grouped by model (grok-bot-automation, grok-bot-default); each of those buckets mixes several bots. The schedules file attributes 56% of spend to 3 named bots; the rest stays unattributed. **How:** Get a per-bot split: export each bot separately (filter by bot) and run the report per file, or run recurring work as named automations so the id is filled.
 - There is no chat / thread id, so calls from different chats are mixed: context size, growth and resets are blended across chats. **How:** Export with a chat id; otherwise read the context size of the main chats directly (one sample per chat is enough).
 - Cost is plan-billed (Included / Free), so dollars are an equivalent priced from tokens, not a bill. Use them to compare options and as a proxy for quota burn. **How:** Nothing to fix; read the dollars as relative.

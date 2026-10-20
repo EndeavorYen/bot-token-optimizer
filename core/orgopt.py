@@ -116,6 +116,38 @@ def board_overhead(k, mode="sequential", cache_rate=0.25):
             "extra_tokens_per_notification": "about one receiver context C"}
 
 
+def board_cost(context, pings_per_day, board_tokens, k=1, cache_hit=DEFAULT_CACHE_HIT, via_tool=True,
+               horizon_days=7, base=8000, handover_at=None, pricing=None):
+    """Cost (USD over the horizon) for one receiver of `pings_per_day` notifications, when each one brings
+    `board_tokens` of board content: fetched with an extra tool call (via_tool) or sent in the message.
+    Whatever is read stays in the context for every later wake-up, so the board's size matters as much
+    as the extra call. Uses evaluate_org, so the hand-over policy and long-context tier apply."""
+    pricing = pricing or load_pricing()
+    org = {"horizon_days": horizon_days, "handover_at": handover_at, "bots": [
+        {"name": "sender", "context_tokens": 0, "base_tokens": 0, "work_rounds_per_wake": 0,
+         "output_tokens_per_wake": 0},
+        {"name": "receiver", "context_tokens": context, "base_tokens": min(base, context),
+         "work_rounds_per_wake": k, "cache_hit_ratio": cache_hit, "reads_board_via_tool": via_tool,
+         "board_read_tokens": board_tokens if via_tool else 0}],
+        "links": [{"from": "sender", "to": "receiver", "messages_per_day": pings_per_day,
+                   "avg_tokens": 50 if via_tool else board_tokens}]}
+    r = next(b for b in evaluate_org(org, pricing)["bots"] if b["bot"] == "receiver")
+    return r["cost_usd"]
+
+
+def board_options(context, pings_per_day, board_tokens, section_tokens, k=1, cache_hit=DEFAULT_CACHE_HIT,
+                  horizon_days=7, base=8000, handover_at=None, pricing=None):
+    """Weekly cost of three ways to get board content to a bot: read the whole board, read only the
+    section it needs, or put that section in the notification."""
+    week = 7 / horizon_days
+    kw = dict(k=k, cache_hit=cache_hit, horizon_days=horizon_days, base=base, handover_at=handover_at, pricing=pricing)
+    full = board_cost(context, pings_per_day, board_tokens, via_tool=True, **kw) * week
+    section = board_cost(context, pings_per_day, section_tokens, via_tool=True, **kw) * week
+    inline = board_cost(context, pings_per_day, section_tokens, via_tool=False, **kw) * week
+    return {"full_board_usd_week": full, "section_usd_week": section, "inline_usd_week": inline,
+            "saving_section_usd_week": full - section, "saving_inline_usd_week": full - inline}
+
+
 # ---------------------------------------------------------------- teaching scenarios
 def scenario_relay(c_worker, c_leader, c_chief):
     """Single task, leader only relays. Total input tokens (flat vs. hierarchy)."""

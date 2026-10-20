@@ -47,7 +47,7 @@ Use whatever read access you have to the other bots. If you cannot read them, as
 | **Groups**: members and what gets posted | links in `org.txt` |
 | **Who notifies whom**, how often, how long the messages are | links in `org.txt` |
 | Current chat length per bot, if the platform shows it | a check on the export's context sizes |
-| Board / shared files that bots read after a ping, and their size | `board` option in `org.txt` |
+| **Boards and shared files**: which exist, their size, who reads them and how often, whole or one section, whether anyone maintains them (archives finished items) | `board=SIZE` in `org.txt`, and a check on the report's measured read size |
 
 Write the schedules as `schedules.txt` in your workspace, one bot per line:
 
@@ -76,6 +76,7 @@ python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --sched
 Read it like a consultant:
 - **Who costs what?** With schedules, the memo names the bots inside each bucket, with each one's $/week, cost per wake-up, context size and how many of its wake-ups found nothing to do. Unscheduled traffic (the client's messages and bot-to-bot pings) is shown separately; if it is large, map it with `org.txt` and `bto org` before you report.
 - **What changed?** Use the same-window comparison; never compare a partial day with a full one. If spend dropped today, say what changed today and that tomorrow's export will confirm it.
+- **Is a board bloated?** The memo measures what each read-then-work wake-up brings in (the second call's prompt minus the first). A median of thousands of tokens means bots read the whole board; a rising figure means it is growing. The memo then proposes reading only the needed section plus a maintenance rule, and prices it with `bto board --board <size> --section <size>`. Check the size against the board itself during fieldwork.
 - **Does the evidence hold?** A schedule with few matches above chance (the memo flags it) is probably written wrong: check it against the bot's settings before relying on it.
 
 ### 4. Recommend
@@ -126,7 +127,7 @@ Good:
 > | 2 | Hand over to a fresh chat: monitor and digest at 40K tokens, your own chats at 100K, each about once a day or less (today: only the platform's automatic summary, at about 165K) | $25–50 | modeled, medium |
 > | 3 | heartbeat: every 1 h → every 3 h | $2 | measured, high |
 >
-> Together about **$72–120 a week**, so the quota would last about **5.5–12 days**. At the low end that is still short of 7: the rest is your own chats and bot-to-bot pings ($70/week), which I am mapping next. Here is the change request for the main bot (below). Shall I send it? One decision for you: with monitor every 2 hours, an incident can wait up to 2 hours to be noticed. Is that acceptable, or should the alerting bot ping monitor directly when something breaks?
+> Together about **$72–119 a week**, so the quota would last about **5.5–12 days**. At the low end that is still short of 7: the rest is your own chats and bot-to-bot pings ($70/week), which I am mapping next. Here is the change request for the main bot (below). Shall I send it? One decision for you: with monitor every 2 hours, an incident can wait up to 2 hours to be noticed. Is that acceptable, or should the alerting bot ping monitor directly when something breaks?
 
 ## Grok Bot specifics
 
@@ -162,7 +163,7 @@ Bot options: `base`, `wakes`, `rounds`, `board`, `out`, `reasoning`, `cache`, `g
 | Who is redundant, what to merge or split, the new org chart | `redesign <org.txt or org.json> [--keep a,b] [--out after.txt]` |
 | Org skeleton of the measured contexts and named bots | `report … --org-out org.json` |
 | Before vs after a redesign you wrote yourself | `compare <before.txt> <after.txt>` |
-| Is "write to a board, then ping" worth it? | `board --k <rounds> --mode sequential\|parallel` |
+| Is "write to a board, then ping" worth it? What does a big board cost? | `board --k <rounds> [--board <tokens read> --section <tokens needed> --context <C> --pings <per day>]` |
 | Relay leader vs summarizing leader | `scenario relay` / `scenario aggregate --n <workers>` |
 | How many bots per manager? | `span --n <workers> --c0 <manager context> --m <tokens per report>` |
 | Time to hand over? | `reset --c <context> --c-base <base> --wakes-per-day <n>` |
@@ -180,9 +181,10 @@ Add `--platform grok-bot --lang <lang>` to each.
 6. Prefer events over polling: a bot that checks every 30 minutes and usually finds nothing should be pinged when something happens instead.
 7. Long content goes one-to-one or into a file; groups get one-line status.
 8. Put small content in the message itself; for large content, write a file and say where it is, what it is, what to do and which part to read.
-9. Machine output (logs, scraped data, test output) is written to files by code, not printed into a chat.
-10. No pure acknowledgements; batch notifications.
-11. Hand over to a fresh chat at a set threshold, starting with the most expensive context. The hand-over note covers goals, decisions made, open items and where the key files are.
+9. Keep shared boards small: readers fetch only the section they need (by heading or item id), and one bot owns the board, archiving finished items and keeping one line of status per open item. Everything read from a board stays in the reader's context until its next hand-over.
+10. Machine output (logs, scraped data, test output) is written to files by code, not printed into a chat.
+11. No pure acknowledgements; batch notifications.
+12. Hand over to a fresh chat at a set threshold, starting with the most expensive context. The hand-over note covers goals, decisions made, open items and where the key files are.
 
 ## Ground rules
 

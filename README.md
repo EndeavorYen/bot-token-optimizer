@@ -121,6 +121,7 @@ You will probably find savings if two or more of these sound familiar:
 - [ ] Your bots reply "OK", "got it" or "thanks" to each other.
 - [ ] A bot's job is mostly passing messages from one bot to another.
 - [ ] Bots "write it to the board, then ping" instead of sending the content.
+- [ ] A shared board that every bot reads in full and nobody trims.
 - [ ] Some bots have been running in the same chat for weeks.
 - [ ] A group chat where every bot posts progress updates.
 - [ ] One manager bot reads everyone's full reports.
@@ -272,7 +273,7 @@ Longest hand-off chain: 5 hops (chief → lead → researcher → writer → rev
 
 > 1. At the current pace your bots cost about **$158 per week**. The quota lasts 3 days; lasting 7 means getting down to about **$68 per week**.
 > 2. 98% of it is re-reading context rather than writing output. A single bot, **monitor**, is 50% of all spend (schedule: every 30m).
-> 3. The recommendations save about **$72–120 per week**, counting each dollar once; with them the quota lasts about **5.5–12.4 days**.
+> 3. The recommendations save about **$72–119 per week**, counting each dollar once; with them the quota lasts about **5.5–12.0 days**.
 
 | Change | Saves / week | Evidence |
 | --- | --- | --- |
@@ -291,6 +292,7 @@ n_T = \frac{G}{T - C_f}, \qquad \text{saving}_T = W R\,p\,\Big(C - \frac{C_f + T
 $$
 
   Each context gets the $T$ that saves most with $n_T \le 7$ hand-overs a week (adjustable). A context that cannot stay within the limit is reported as a decision with its price, never silently dropped.
+- **Board size.** In a read-then-work wake-up, the second call's prompt minus the first call's prompt and answer is what the first call fetched. A median of thousands of tokens means a whole board is read; a rising median means it is growing. Everything fetched stays in the context for every later wake-up, so the memo compares reading the whole board with reading only the needed section (about 2K tokens) after a clean-up, and prices the hand-overs on the slower growth that follows. `bto board --board 12000 --section 2000` shows the three options (whole board, section, section in the message) for any figures.
 - **Quota days.** At weekly spend $S$ the quota lasting $d$ days is worth $Q = S\,d/7$. Lasting $d^{*}$ days needs $S \le 7Q/d^{*}$; after saving $\Delta S$ it lasts $7Q/(S - \Delta S)$ days. `bto quota` does the same arithmetic for any figures.
 - **Each dollar once.** A hand-over is priced on the wake-ups left after the schedule changes, idle checks are not counted again as acknowledgements, and cache savings shrink with the contexts. Measured, modeled and judgment figures are labeled; judgment ranges never enter the total.
 
@@ -300,7 +302,7 @@ $$
 
 | Change | Tried when | The formula weighs |
 | --- | --- | --- |
-| Drop acknowledgements, content in the message, one-line group status | always | wake-ups and board reads removed |
+| Drop acknowledgements, read only the needed board section, content in the message, one-line group status | always | wake-ups, board reads and board content removed |
 | **Retire** a bot | one upstream, one downstream, no tool work or own wake-ups, passes on about what it receives | its context is no longer read; the hand-off goes direct |
 | **Merge** two bots | they hand work to each other, or share a manager | one context and no hand-off wake-ups, against a larger context (both bases kept, the day's work conserved) read on every wake-up |
 | **Split** a bot | it serves three or more sources | two smaller contexts, against a short summary exchanged twice a day |
@@ -334,7 +336,7 @@ Install with `pip install git+https://github.com/EndeavorYen/bot-token-optimizer
 | Diagnose the team | `bto org org.txt --platform grok-bot` |
 | Who is redundant, what to merge or split, the best org chart | `bto redesign org.txt --keep chief --out after.txt` |
 | Compare a redesign you wrote | `bto compare org.txt org_redesign.txt` |
-| Is a board round-trip worth it? | `bto board --k 1` |
+| Is a board round-trip worth it? What does a big board cost? | `bto board --k 1 --board 12000 --section 2000` |
 | How many bots per manager? | `bto span --n 12 --c0 30000 --m 1000` |
 | Time for a fresh chat? | `bto reset --c 150000 --c-base 8000` |
 | List pricing and platform presets | `bto presets` |

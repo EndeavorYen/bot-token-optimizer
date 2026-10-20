@@ -127,6 +127,11 @@ def build_parser():
     s = sub.add_parser("board", parents=[common], help='is "write to a board, then ping" worth it?')
     s.add_argument("--k", type=int, default=1, help="tool-call rounds of own work per wake-up")
     s.add_argument("--mode", choices=["sequential", "parallel"], default="sequential")
+    s.add_argument("--board", type=float, help="tokens the receiver reads from the board each time (enables the cost table)")
+    s.add_argument("--section", type=float, default=2000, help="tokens of the section it actually needs")
+    s.add_argument("--context", type=float, default=60000, help="receiver's context (tokens)")
+    s.add_argument("--pings", type=float, default=10, help="notifications per day that send it to the board")
+    s.add_argument("--handover-at", type=float, help="the receiver hands over at this context size")
 
     s = sub.add_parser("scenario", parents=[common], help="relay leader vs. summarizing leader")
     s.add_argument("kind", choices=["relay", "aggregate"])
@@ -284,7 +289,11 @@ def _run(a, lang, pricing, cap):
         _dump(res) if a.json else print(orgopt.compare_report_md(res, lang))
     elif a.cmd == "board":
         r_cache, _, _ = orgopt.price_ratios(pricing)
-        _dump(orgopt.board_overhead(a.k, a.mode, r_cache))
+        out = orgopt.board_overhead(a.k, a.mode, r_cache)
+        if a.board:
+            out["weekly_cost"] = orgopt.board_options(a.context, a.pings, a.board, a.section, k=a.k,
+                                                      handover_at=a.handover_at, pricing=pricing)
+        _dump(out)
     elif a.cmd == "scenario":
         fn = orgopt.scenario_relay if a.kind == "relay" else None
         _dump(fn(a.c_worker, a.c_leader, a.c_chief) if fn else

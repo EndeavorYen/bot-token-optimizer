@@ -30,6 +30,7 @@ GROUP_STATUS_TOKENS = 60
 GROUP_HEAVY = 300
 COORD_MSGS, COORD_TOKENS = 2, 300   # what two halves of a split bot send each other per day
 LEADER_BASE = 8000
+BOARD_SECTION = 2000        # tokens a reader brings in when it reads only the section it needs
 SPLIT_MIN_SOURCES = 3      # only a bot that serves several sources is worth splitting
 EVAL_DAYS = 28
 DEFAULT_POLICY = 120000     # compare structures as if every bot hands over at this context size
@@ -103,6 +104,18 @@ def drop_acks(org):
     return o, {"kind": "acks", "links": [f"{ln['from']} → {ln['to']}" for ln in acks]}
 
 
+def trim_board(org):
+    """Readers fetch only the section they need from a board kept small, instead of the whole board."""
+    readers = [b["name"] for b in org["bots"] if b.get("reads_board_via_tool")
+               and float(b.get("board_read_tokens", 2000)) > BOARD_SECTION and _links_in(org, b["name"])]
+    if not readers:
+        return None
+    o = _fresh(org)
+    for name in readers:
+        _bot(o, name)["board_read_tokens"] = BOARD_SECTION
+    return o, {"kind": "board_trim", "bots": readers}
+
+
 def inline_board(org):
     readers = [b["name"] for b in org["bots"] if b.get("reads_board_via_tool") and _links_in(org, b["name"])]
     if not readers:
@@ -110,7 +123,7 @@ def inline_board(org):
     o = _fresh(org)
     for name in readers:
         b = _bot(o, name)
-        extra = float(b.get("board_read_tokens", 2000))
+        extra = min(float(b.get("board_read_tokens", 2000)), BOARD_SECTION)   # only the section it needs
         b["reads_board_via_tool"] = False
         b.pop("board_read_tokens", None)
         for ln in _links_in(o, name):
@@ -129,7 +142,7 @@ def slim_groups(org):
     return o, {"kind": "group", "groups": heavy}
 
 
-INSTRUCTION_MOVES = (drop_acks, inline_board, slim_groups)
+INSTRUCTION_MOVES = (drop_acks, trim_board, inline_board, slim_groups)
 
 
 # ---------------------------------------------------------------- structural changes
@@ -417,6 +430,8 @@ def _step_text(s, lang):
         return t("rd.acks", lang, links=", ".join(s["links"]))
     if k == "board":
         return t("rd.board", lang, bots=", ".join(s["bots"]))
+    if k == "board_trim":
+        return t("rd.board_trim", lang, bots=", ".join(s["bots"]), sec=f"{BOARD_SECTION:,.0f}")
     if k == "group":
         return t("rd.group", lang, groups=", ".join(s["groups"]), tok=GROUP_STATUS_TOKENS)
     if k == "retire":
@@ -436,6 +451,8 @@ def _step_request(s, lang):
         return t("p.ack.req", lang)
     if k == "board":
         return t("p.read_first.req", lang)
+    if k == "board_trim":
+        return t("p.board_trim.req_read", lang, names=", ".join(s["bots"]))
     return t(f"rd.req.{k}", lang, **{kk: (", ".join(v) if isinstance(v, list) else v) for kk, v in s.items()
                                      if kk not in ("kind", "saving_eq", "usd_week")})
 

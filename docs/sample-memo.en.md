@@ -4,7 +4,7 @@
 
 1. At the current pace your bots cost about **$27 per week** (≈ $3.86/day), as a token-priced equivalent.
 2. **32% of it is researcher**, and 96% of all spend is re-reading context rather than writing output.
-3. The recommendations below save about **$9–$17 per week (32%–65%)**, counting each dollar once; your target of $18/week still needs about $0/week more, i.e. about 3% fewer wake-ups of researcher.
+3. The recommendations below save about **$8–$16 per week (29%–57%)**, counting each dollar once; your target of $18/week still needs about $1/week more, i.e. about 14% fewer wake-ups of researcher.
 
 Overall confidence: **high**.
 
@@ -38,16 +38,16 @@ Ranked by dollars × confidence ÷ effort. Savings overlap, so they are not simp
 | # | Action | Evidence | Saves / week | Confidence | Effort | Owner |
 |---|---|---|---|---|---|---|
 | 1 | **Hand over to a fresh chat whenever a context passes 40,000 tokens** | every wake-up re-reads the whole context; typical now → threshold: chief 91,436 → 40,000 (≈3.6 hand-overs/week), researcher 52,797 → 40,000 (≈4.5 hand-overs/week), support/a 80,707 → 40,000 (≈1.4 hand-overs/week) | $5.64–$11.27 (modeled) | medium | low | _to assign_ |
-| 2 | **Put the content in the notification instead of “go read the board”** | 56 wake-ups (20%) spend a full-context call just to fetch the work; mostly researcher | $1.87–$3.75 (measured) | medium | low | _to assign_ |
-| 3 | **Stop wake-ups that only say “OK”** | 25 wake-ups (9% of all) made a single call with almost no output; mostly writer | $0.46–$0.91 (measured) | medium | low | _to assign_ |
-| 4 | **Stop breaking the prompt cache mid-wake-up** | calls after the first one in a wake-up still paid $2.58 for uncached input; mostly researcher, chief | $0.76–$1.52 (measured) | medium | medium | _to assign_ |
+| 2 | **Put the content in the notification instead of “go read the board”** | 56 wake-ups (20%) spend a full-context call just to fetch the work; mostly researcher | $1.09–$2.18 (measured) | medium | low | _to assign_ |
+| 3 | **Stop breaking the prompt cache mid-wake-up** | calls after the first one in a wake-up still paid $2.58 for uncached input; mostly researcher, chief | $0.76–$1.52 (measured) | medium | medium | _to assign_ |
+| 4 | **Stop wake-ups that only say “OK”** | 25 wake-ups (9% of all) made a single call with almost no output; mostly writer | $0.27–$0.53 (measured) | medium | low | _to assign_ |
 
 **How**
 
 1. Put the rule in each bot's instructions so the bot hands over by itself when its context passes its threshold: a hand-over note (goals, decisions, open items, ≤ 3K tokens), then a new chat that starts from it. The savings already pay for every hand-over; thresholds are chosen so no context needs more than the weekly limit shown below.
 2. Inline small payloads; for large ones, name the exact section to read.
-3. Tell bots not to acknowledge; batch notifications; only notify when the receiver must act.
-4. Keep fixed instructions first and unchanged; avoid editing or re-ordering earlier messages and tool lists.
+3. Keep fixed instructions first and unchanged; avoid editing or re-ordering earlier messages and tool lists.
+4. Tell bots not to acknowledge; batch notifications; only notify when the receiver must act.
 
 ### Hand-over thresholds compared
 
@@ -73,7 +73,7 @@ Do not change anything else.
 
 ## Decisions and data needed
 
-- Reaching $18/week needs about $0/week beyond these actions: choose between fewer wake-ups of researcher (about 3% fewer) and a higher budget.
+- Reaching $18/week needs about $1/week beyond these actions: choose between fewer wake-ups of researcher (about 14% fewer) and a higher budget.
 
 ## How we will know it worked
 

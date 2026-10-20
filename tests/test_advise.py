@@ -404,15 +404,15 @@ class TestSetupGuide(unittest.TestCase):
         ho = next(a for a in pl["actions"] if a["code"] == "handover")
         self.assertEqual({p["unit"]: p["at"] for p in ho["per_unit"]}["monitor"], 40000)
         self.assertEqual((round(ho["usd_week_low"]), round(ho["usd_week_high"])), (25, 50))
-        self.assertEqual((round(pl["combined_low"]), round(pl["combined_high"])), (72, 120))
-        self.assertEqual((round(q["days_after_low"], 1), round(q["days_after_high"], 1)), (5.5, 12.4))
+        self.assertEqual((round(pl["combined_low"]), round(pl["combined_high"])), (72, 119))
+        self.assertEqual((round(q["days_after_low"], 1), round(q["days_after_high"], 1)), (5.5, 12.0))
         for guide in ("SETUP.en.md", "SETUP.zh-TW.md"):
             g = self._read(guide)
-            for needle in ("$158", "$68", "64%", "$41–59", "$72–120", "5.5", "bto 0.6.0", "grok_schedules.txt"):
+            for needle in ("$158", "$68", "64%", "$41–59", "$72–119", "5.5", "bto 0.6.0", "grok_schedules.txt"):
                 self.assertIn(needle, g, (guide, needle))
         for playbook in ("ADVISOR_BOT.en.md", "ADVISOR_BOT.zh-TW.md"):
             g = self._read(playbook)
-            for needle in ("$158", "$68", "64%", "$41–59", "$25–50", "$72–120", "5.5", "$70", "bto quota"):
+            for needle in ("$158", "$68", "64%", "$41–59", "$25–50", "$72–119", "5.5", "$70", "bto quota"):
                 self.assertIn(needle, g, (playbook, needle))
 
 

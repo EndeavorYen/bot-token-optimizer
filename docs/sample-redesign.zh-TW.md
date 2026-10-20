@@ -9,7 +9,7 @@
 | # | 變更 | 層級 | 每週可省 |
 |---|---|---|---|
 | 1 | 取消純確認訊息（writer → researcher, reviewer → writer） | 指令 | $19.40 |
-| 2 | 內容直接放進訊息，不再讀 board（researcher, writer） | 指令 | $5.82 |
+| 2 | 把需要的段落直接放進訊息，不再讀 board（researcher, writer） | 指令 | $5.82 |
 | 3 | 群組 all-hands：只貼一行狀態（約 60 token），長內容改走一對一 | 指令 | $1.26 |
 | 4 | 拿掉 **lead**：它只是把 chief 的工作轉給 researcher；改成 chief 直接交給 researcher | 結構 | $3.19 |
 | 5 | 把 **writer** 併入 **researcher**：兩者互相交接（或同一個主管），合成一個約 60,000 token 的上下文，省掉兩份上下文和交接。合併前先確認 writer 不需要獨立於 researcher（例如審查、核准），也不需要 researcher 沒有的工具或權限 | 結構 | $0.87 |

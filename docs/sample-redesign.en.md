@@ -9,7 +9,7 @@ Today the team costs about **$62.87/week**. Instruction changes alone bring it t
 | # | Change | Level | Saves / week |
 |---|---|---|---|
 | 1 | Drop acknowledgement messages (writer → researcher, reviewer → writer) | instructions | $19.40 |
-| 2 | Send the content in the message instead of a board read (researcher, writer) | instructions | $5.82 |
+| 2 | Send the needed section in the message instead of a board read (researcher, writer) | instructions | $5.82 |
 | 3 | Group all-hands: one-line status (about 60 tokens), long content one-to-one | instructions | $1.26 |
 | 4 | Retire **lead**: it only passes work from chief to researcher; chief hands over to researcher directly | structure | $3.19 |
 | 5 | Merge **writer** into **researcher**: they hand work to each other (or share a manager); one context of about 60,000 tokens instead of two plus the hand-offs. Check first that writer need not stay independent of researcher (review, approval) and needs no tools or access researcher lacks | structure | $0.87 |

@@ -96,7 +96,7 @@ Let's do a trial run. In your workspace, run python3 samples/make_grok_export.py
 
 - The first paragraph is the bottom line: about **$158 a week**, and lasting 7 days means getting down to about **$68**; **half of all spend is one bot, monitor** (woken every 30 minutes, re-reading about 110K tokens each time, with **64%** of its checks finding nothing to do).
 - The first recommendation is a concrete change: **monitor from every 30 minutes to every 2 hours**, saving about **$41–59 a week**.
-- A short table of the top changes with dollars and confidence, about **$72–120 a week** together, so the quota lasts about **5.5–12 days**, plus where the rest of the gap is and how it will look into it.
+- A short table of the top changes with dollars and confidence, about **$72–119 a week** together, so the quota lasts about **5.5–12 days**, plus where the rest of the gap is and how it will look into it.
 - Hand-overs are not dropped: each bot gets its own threshold (monitor and digest at 40K tokens, the rest at 100K), about once a day or less.
 - A **change request ready to paste to the main bot**, and a question whether to send it.
 - At most **one** question, about something only you can decide (e.g. "is noticing an incident up to 2 hours later acceptable?").

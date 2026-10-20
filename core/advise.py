@@ -39,6 +39,11 @@ ACK_OUTPUT = 30             # same threshold as analyze_usage's acknowledgement 
 IDLE_OUTPUT = 80            # a single-call wake-up writing at most this much found nothing to do
 MATCH_EARLY = 60            # a scheduled wake-up may start this many seconds before the fire time ...
 MATCH_WINDOW = 300          # ... or up to this many seconds after it
+BOARD_MIN_READS = 10       # read-then-work wake-ups needed before judging a board's size
+BOARD_BIG = 4000            # a fetch this large (median) means a whole board, not a section, is read
+BOARD_SECTION = 2000        # what reading only the needed section usually brings in
+BOARD_CAP = 3000            # a maintained board stays under this
+BOARD_GROWING = 1.3         # fetches 30% larger in the second half: the board is growing
 FREQ_IDLE = 0.4             # propose a lower frequency when at least 40% of scheduled checks are idle
 
 
@@ -174,9 +179,11 @@ def wake_stats(wakes, pricing, has_cost, span_days):
     inp = sum(r["input"] for r in rows)
     idle = [w for w in wakes if len(w["rows"]) == 1 and w["rows"][0]["output"] <= IDLE_OUTPUT]
     short = [w["rows"][0] for w in wakes if len(w["rows"]) == 1 and w["rows"][0]["output"] <= ACK_OUTPUT]
+    rf = [w["rows"] for w in wakes if len(w["rows"]) >= 2 and w["rows"][0]["output"] <= IDLE_OUTPUT]
     t0 = wakes[0]["start"]
     series_growth, _ = analyze_usage.growth_per_day([(w["start"] - t0).total_seconds() / 86400 for w in wakes], ctx)
-    return {"growth_per_wake": sum(analyze_usage.wake_growth(w["rows"]) for w in wakes) / n,
+    return {**analyze_usage.fetch_stats(rf), "read_first_wakes": len(rf),
+            "growth_per_wake": sum(analyze_usage.wake_growth(w["rows"]) for w in wakes) / n,
             "series_growth_per_day": max(series_growth, 0.0),
             "short_wakes": len(short), "short_usd": sum(orgopt.call_cost_usd(r["input"], r["cached"], r["output"], pricing) for r in short),"wakes": n, "usd": usd, "usd_week": usd * 7 / span_days, "per_wake": usd / n,
             "wakes_per_day": n / span_days, "rounds_per_wake": len(rows) / n,
@@ -359,7 +366,8 @@ def _entities(res, att, lang="en"):
     """The contexts to advise on: each unit, except that a bucket split by schedules is replaced by
     its scheduled bots plus what is left (unscheduled traffic)."""
     touched = set(att["touched_units"]) if att else set()
-    keys = ("C_p50", "wakes_per_day", "rounds_per_wake", "cache_hit", "wakes", "usd", "short_wakes")
+    keys = ("C_p50", "wakes_per_day", "rounds_per_wake", "cache_hit", "wakes", "usd", "short_wakes",
+            "read_first_wakes", "fetch_p50", "fetch_p90", "fetch_trend")
 
     def growth_week(within, wpd, series=0.0):
         # what the wake-ups add themselves, or the measured trend between hand-overs if that is larger
@@ -461,6 +469,45 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
     if a:
         a["request"] = t("p.read_first.req", lang)
 
+    # modeled from a measured size: read-then-work wake-ups that fetch a lot are reading a whole board.
+    # Whatever is fetched stays in the context, so compare reading the whole board with reading only the
+    # section needed (after a regular clean-up), under the hand-over policy that applies to that context.
+    big = []
+    for e in ents:
+        if e.get("read_first_wakes", 0) < BOARD_MIN_READS or e.get("fetch_p50", 0) < BOARD_BIG:
+            continue
+        policy = e.get("C_peak") if e.get("sawtooth") else None      # the platform's own summarizing
+        sec = min(e["fetch_p50"], BOARD_SECTION)
+        pings = e["read_first_wakes"] / res["span_days"]
+        opt = orgopt.board_options(e["C_p50"], pings, e["fetch_p50"], sec, k=max(e["rounds_per_wake"] - 2, 0),
+                                   cache_hit=e["cache_hit"], handover_at=policy, pricing=pricing)
+        if opt["saving_section_usd_week"] > 0:
+            big.append((e, opt, sec))
+    if big:
+        big.sort(key=lambda x: -x[1]["saving_section_usd_week"])
+        hi = sum(o["saving_section_usd_week"] for _, o, _ in big)
+        sep_ = "、" if lang == "zh-TW" else ", "
+        items = sep_.join(t("p.board_trim.item", lang, name=e["name"], f=f"{e['fetch_p50']:,.0f}",
+                            f90=f"{e['fetch_p90']:,.0f}", n=e["read_first_wakes"] / res["span_days"])
+                          for e, _, _ in big[:3])
+        growing = [e for e, _, _ in big if e.get("fetch_trend", 1) >= BOARD_GROWING]
+        grow = t("p.board_trim.growing", lang, name=growing[0]["name"], r=growing[0]["fetch_trend"]) if growing else ""
+        a = add("board_trim", ", ".join(e["name"] for e, _, _ in big), hi / 2, hi, "medium", "medium", "modeled",
+                items=items, sec=f"{BOARD_SECTION:,.0f}", grow=grow)
+        if a:
+            named = [e["name"] for e, _, _ in big if e["kind"] in ("bot", "context")]
+            if any(e["kind"] in ("bucket", "remainder") for e, _, _ in big):
+                named.append(t("p.req.board_readers", lang))
+            a["request"] = [t("p.board_trim.req_read", lang, names=sep_.join(named)),
+                            t("p.board_trim.req_keep", lang, sec=f"{BOARD_SECTION:,.0f}",
+                              cap=f"{BOARD_CAP:,.0f}")]
+            a["per_unit"] = [{"unit": e["name"], "fetch_p50": e["fetch_p50"], "section": sec,
+                              "usd_week": o["saving_section_usd_week"]} for e, o, sec in big]
+            # a smaller board also slows the context's growth, so the hand-overs below are priced on it
+            for e, _, sec in big:
+                e["growth_week"] = max(0.0, e["growth_week"] - (e["fetch_p50"] - sec) * e["read_first_wakes"]
+                                       / res["span_days"] * 7)
+                e["board_trimmed"] = True
     # modeled: hand over to a fresh chat whenever a context passes a threshold T. Under that policy a
     # context averages about (fresh start + T) / 2, and it needs (growth per week) / (T - fresh start)
     # hand-overs a week, each costing one rebuild (the verified reset model). Every candidate T is priced
@@ -476,7 +523,9 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
         prem = sum(a["usd_week_low"] for a in absorbed)
         sep_ = "、" if lang == "zh-TW" else ", "
         names = sep_.join(t("p.handover.item", lang, name=p["name"], c=f"{p['c']:,.0f}", at=f"{p['at']:,.0f}",
-                             n=p["handovers_week"]) for p in ho[:4]) + ("…" if len(ho) > 4 else "")
+                             n=p["handovers_week"])
+                          + (t("p.handover.after_trim", lang) if p["entity"].get("board_trimmed") else "")
+                          for p in ho[:4]) + ("…" if len(ho) > 4 else "")
         saw = [p["entity"] for p in ho if p["entity"]["sawtooth"]]
         sawtxt = t("p.handover.saw", lang, floor=f"{saw[0]['C_floor']:,.0f}", peak=f"{saw[0]['C_peak']:,.0f}",
                    unit=saw[0]["name"]) if saw else ""
@@ -503,10 +552,21 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
                 actions.remove(x)
     plan_handover = {"sweep": sweep, "picks": picks, "blocked": blocked, "max_per_week": max_handovers_week,
                      "fixed": handover_at}
+
     # cache misses inside a wake-up cost in proportion to the context, so after the hand-overs and
     # frequency changes only the remaining share of input spend is left to recover
     removed = sum(a["usd_week_high"] for a in actions if a["code"] in ("handover", "frequency"))
     left = max(0.0, 1 - removed / week_usd) if week_usd else 1.0
+    # acknowledgement and fetch-first calls also re-read the context, so once hand-overs shrink the
+    # contexts, what is left of them costs less; scale them the same way (frequency changes have already
+    # taken their own idle checks out of the acknowledgement figure)
+    if any(a["code"] == "handover" for a in actions):
+        ho_removed = sum(a["usd_week_high"] for a in actions if a["code"] == "handover")
+        shrink = max(0.0, 1 - ho_removed / week_usd) if week_usd else 1.0
+        for a in actions:
+            if a["code"] in ("ack", "read_first"):
+                a["usd_week_low"] *= shrink
+                a["usd_week_high"] *= shrink
     x = res["anatomy"]["in_wake_miss_premium_usd"] * wk * left
     add("cache", None, x / 2, x, "medium", "medium", "measured",
         usd=res["anatomy"]["in_wake_miss_premium_usd"], units=_top_units(units, "in_wake_miss_premium_usd"))

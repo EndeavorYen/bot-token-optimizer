@@ -229,6 +229,26 @@ def wake_growth(wake):
     return max(0.0, last["input"] + last["output"] + last.get("reasoning", 0.0) - wake[0]["input"])
 
 
+def fetched_tokens(wake):
+    """In a read-then-work wake-up, what the first (fetching) call brought into the context: the second
+    call's prompt minus the first call's prompt and answer. For a board read, this is the board's size."""
+    a, b = wake[0], wake[1]
+    return max(0.0, b["input"] - a["input"] - a["output"] - a.get("reasoning", 0.0))
+
+
+def fetch_stats(read_first_wakes):
+    """Median and p90 of what read-then-work wake-ups fetch, and how the median moved (second half of the
+    wake-ups vs the first half; >1 means the board is growing)."""
+    f = [fetched_tokens(w) for w in read_first_wakes]
+    if not f:
+        return {"fetch_p50": 0.0, "fetch_p90": 0.0, "fetch_trend": 1.0}
+    half = len(f) // 2
+    early, late = (f[:half], f[half:]) if half >= 3 else (f, f)
+    m0 = statistics.median(early)
+    return {"fetch_p50": percentile(f, 0.5), "fetch_p90": percentile(f, 0.9),
+            "fetch_trend": statistics.median(late) / m0 if m0 else 1.0}
+
+
 def sessionize(rows, gap_seconds):
     """Consecutive calls of one context no more than `gap` apart form one wake-up."""
     wakes, cur = [], []
@@ -336,6 +356,7 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
             "reasoning_tokens": reasoning, "output_per_wake": (out + reasoning) / len(wakes), "usd": usd,
             "short_wakes": len(short), "short_wake_usd": sum(cost1(w[0]) for w in short),
             "read_first_wakes": len(read_first), "read_first_usd": sum(cost1(w[0]) for w in read_first),
+            **fetch_stats(read_first),
             "long_context_calls": len(long_calls), "long_context_extra_usd": long_extra,
             "uncached_input_usd": unc_usd, "cached_input_usd": cached_usd, "output_usd": out_usd,
             "long_premium_usd": premium,

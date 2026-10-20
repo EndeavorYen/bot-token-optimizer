@@ -25,9 +25,9 @@ The full memo it produces: [sample-memo-grok.en.md](sample-memo-grok.en.md).
 > | 1 | **monitor: every 30 min → every 2 h** | $41–59 | measured, high |
 > | 2 | **Hand over to a fresh chat: monitor and digest at 40K tokens, your own chats at 100K**, each about once a day or less (today: only the platform's automatic summary) | $25–50 | modeled, medium |
 > | 3 | **heartbeat: every 1 h → every 3 h** (65% of its checks are idle) | $2 | measured, high |
-> | 4 | Put short content in the ping instead of "go read the board" | $2–4 | measured, medium |
+> | 4 | Put short content in the ping instead of "go read the board" | $1–3 | measured, medium |
 >
-> Together about **$72–120 a week**, counting each dollar once, so the quota would last about **5.5–12 days**. At the low end that is still short of 7. The rest sits in your own chats and bot-to-bot pings ($70/week), and I am mapping who pings whom next.
+> Together about **$72–119 a week**, counting each dollar once, so the quota would last about **5.5–12 days**. At the low end that is still short of 7. The rest sits in your own chats and bot-to-bot pings ($70/week), and I am mapping who pings whom next.
 >
 > Change request for the main bot:
 >
