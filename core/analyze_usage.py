@@ -37,6 +37,12 @@ ALIASES = {
     "cost": ["cost_usd", "cost", "price_usd", "amount_usd"],
 }
 REQUIRED = ["time", "input"]
+# Grok Bot usage-events export (Date, Cloud Agent ID, Automation ID, Kind, Model, Max Mode,
+# Input (w/ Cache Write), Input (w/o Cache Write), Cache Read, Output Tokens, Total Tokens, Cost):
+# the prompt is split over three columns, so input = their sum and cached = Cache Read.
+SPLIT_INPUT = ("Input (w/ Cache Write)", "Input (w/o Cache Write)", "Cache Read")
+SPLIT_LABEL = " + ".join(SPLIT_INPUT)
+CLOUD_AGENT_COL = "Cloud Agent ID"   # rows with an id here are one-shot cloud runs, not persistent bots
 RESET_DROP = 0.6        # a wake-up whose context is < 60% of the previous one ...
 RESET_MIN = 5000        # ... and at least 5K tokens smaller counts as a hand-over
 
@@ -58,6 +64,9 @@ def map_columns(header, overrides=None, lang="en"):
             if n in norm:
                 mapping[field] = norm[n]
                 break
+    if "input" not in mapping and "input" not in (overrides or {}) and all(c in header for c in SPLIT_INPUT):
+        mapping["input"] = SPLIT_LABEL
+        mapping.setdefault("cached", "Cache Read")
     for k, v in (overrides or {}).items():
         if v not in header:
             raise UsageError(t("u.err_map", lang, col=v, cols=header))
@@ -100,7 +109,11 @@ def _num(v):
     return float(v)
 
 
-def load_rows(path, overrides=None, cached_separate=False, lang="en"):
+def load_rows(path, overrides=None, cached_separate=False, lang="en", info=None):
+    """Rows sorted by time, the column mapping and the number of skipped rows.
+    `info` (a dict), when given, receives load notes: cloud_agent_rows, cost_text_rows, split_input."""
+    info = {} if info is None else info
+    info.update(cloud_agent_rows=0, cost_text_rows=0, split_input=False)
     with open(path, newline="", encoding="utf-8-sig") as f:
         sample = f.read(8192)
         f.seek(0)
@@ -110,21 +123,39 @@ def load_rows(path, overrides=None, cached_separate=False, lang="en"):
             dialect = csv.excel
         reader = csv.DictReader(f, dialect=dialect)
         mapping = map_columns(reader.fieldnames or [], overrides, lang)
+        split = mapping["input"] == SPLIT_LABEL
+        info["split_input"] = split
+        skip_cloud = split and CLOUD_AGENT_COL in (reader.fieldnames or [])
         rows, skipped = [], 0
         for raw in reader:
+            if skip_cloud and (raw.get(CLOUD_AGENT_COL) or "").strip():
+                info["cloud_agent_rows"] += 1
+                continue
             try:
-                r = {"time": parse_time(raw[mapping["time"]]), "input": _num(raw[mapping["input"]])}
+                inp = sum(_num(raw[c]) for c in SPLIT_INPUT) if split else _num(raw[mapping["input"]])
+                r = {"time": parse_time(raw[mapping["time"]]), "input": inp}
             except (ValueError, KeyError):
                 skipped += 1
                 continue
             r["bot"] = (raw.get(mapping["bot"]) or "").strip() if "bot" in mapping else ""
             r["chat"] = (raw.get(mapping["chat"]) or "").strip() if "chat" in mapping else ""
             for k in ("cached", "output", "reasoning", "cost"):
-                r[k] = _num(raw.get(mapping[k], 0)) if k in mapping else 0.0
-            if cached_separate:          # cached tokens reported separately from input
+                try:
+                    r[k] = _num(raw.get(mapping[k], 0)) if k in mapping else 0.0
+                except ValueError:
+                    if k != "cost":
+                        raise UsageError(t("u.err_num", lang, col=mapping[k], v=raw.get(mapping[k])))
+                    info["cost_text_rows"] += 1      # e.g. "Included" / "Free" on plan-billed exports
+                    r[k] = 0.0
+            if cached_separate and not split:    # cached tokens reported separately from input
                 r["input"] += r["cached"]
             r["cached"] = min(r["cached"], r["input"])
             rows.append(r)
+    if info["cost_text_rows"]:
+        # a cost column that is not a number (plan-billed) cannot calibrate anything: price the calls instead
+        info["cost_column"] = mapping.pop("cost")
+        for r in rows:
+            r["cost"] = 0.0
     rows.sort(key=lambda r: r["time"])
     return rows, mapping, skipped
 
@@ -316,8 +347,15 @@ def report_md(res, lang="en"):
     return "\n".join(L)
 
 
-def notes(mapping, skipped, lang="en"):
+def notes(mapping, skipped, lang="en", info=None):
+    info = info or {}
     out = [t("u.mapping", lang, m=mapping) + (f"; {t('u.skipped', lang, n=skipped)}" if skipped else "")]
+    if info.get("split_input"):
+        out.append(t("u.split_input", lang))
+    if info.get("cloud_agent_rows"):
+        out.append(t("u.cloud_agent", lang, n=info["cloud_agent_rows"], col=CLOUD_AGENT_COL))
+    if info.get("cost_text_rows"):
+        out.append(t("u.cost_text", lang, n=info["cost_text_rows"], col=info.get("cost_column", "cost")))
     if "bot" not in mapping:
         out.append(t("u.no_bot", lang) + t("u.use_chat" if "chat" in mapping else "u.all_one", lang))
     if "cached" not in mapping:
@@ -326,9 +364,10 @@ def notes(mapping, skipped, lang="en"):
 
 
 def run(csv_path, pricing, overrides=None, cached_separate=False, gap=120, soft_cap=None, lang="en"):
-    rows, mapping, skipped = load_rows(csv_path, overrides, cached_separate, lang)
+    info = {}
+    rows, mapping, skipped = load_rows(csv_path, overrides, cached_separate, lang, info)
     res = analyze(rows, pricing, gap, soft_cap=soft_cap, has_cost="cost" in mapping, lang=lang)
-    res["column_mapping"], res["skipped_rows"] = mapping, skipped
+    res["column_mapping"], res["skipped_rows"], res["load_info"] = mapping, skipped, info
     return res
 
 

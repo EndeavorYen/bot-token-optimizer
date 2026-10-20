@@ -101,5 +101,82 @@ class TestLoading(unittest.TestCase):
         self.assertEqual(analyze_usage.split_resets(days, [10, 20, 5]), [(0, 3)])   # tiny drops ignored
 
 
+GROK_HEADER = ("Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),"
+               "Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost\n")
+# Shape of a real Grok Bot usage-events export (newest first, plan-billed Cost, one cloud-agent row).
+GROK_ROWS = [
+    '"2026-10-19T13:01:42.776Z","","","Included","grok-bot-automation","No","733","2","62418","438","63591","Included"',
+    '"2026-10-19T13:00:10.000Z","ca-1","","Included","grok-4.7-high","No","5000","0","0","100","5100","Included"',
+    '"2026-10-19T12:59:00.000Z","","","Included","grok-bot-default","No","14258","2","58549","345","73154","Free"',
+    '"2026-10-19T12:58:00.000Z","","","Included","grok-bot-default","No","0","24086","9728","448","34262","Included"',
+]
+
+
+class TestGrokBotExport(unittest.TestCase):
+    def setUp(self):
+        self.p = os.path.join(tempfile.mkdtemp(), "usage-events.csv")
+        with open(self.p, "w", encoding="utf-8") as f:
+            f.write(GROK_HEADER + "\n".join(GROK_ROWS) + "\n")
+
+    def test_split_prompt_columns_are_summed(self):
+        info = {}
+        rows, mapping, skipped = analyze_usage.load_rows(self.p, info=info)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(mapping["time"], "Date")
+        self.assertEqual(mapping["cached"], "Cache Read")
+        self.assertEqual(mapping["output"], "Output Tokens")
+        self.assertTrue(info["split_input"])
+        # sorted oldest first; input = cache write + uncached + cache read, and equals Total - Output
+        self.assertEqual([r["input"] for r in rows], [33_814, 72_809, 63_153])
+        self.assertEqual([r["cached"] for r in rows], [9_728, 58_549, 62_418])
+        self.assertEqual([r["input"] + r["output"] for r in rows], [34_262, 73_154, 63_591])
+
+    def test_cloud_agent_rows_excluded(self):
+        info = {}
+        rows, _, _ = analyze_usage.load_rows(self.p, info=info)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(info["cloud_agent_rows"], 1)
+
+    def test_text_cost_falls_back_to_pricing(self):
+        info = {}
+        rows, mapping, _ = analyze_usage.load_rows(self.p, info=info)
+        self.assertNotIn("cost", mapping)
+        self.assertEqual(info["cost_text_rows"], 3)
+        res = analyze_usage.analyze(rows, PRICING, has_cost="cost" in mapping)
+        priced = sum(orgopt.call_cost_usd(r["input"], r["cached"], r["output"], PRICING) for r in rows)
+        self.assertAlmostEqual(res["total_usd"], priced)
+        self.assertGreater(res["total_usd"], 0)
+
+    def test_run_and_notes(self):
+        res = analyze_usage.run(self.p, PRICING)
+        text = "\n".join(analyze_usage.notes(res["column_mapping"], res["skipped_rows"], "en", res["load_info"]))
+        self.assertIn("excluded 1 rows with a Cloud Agent ID", text)
+        self.assertIn("non-numeric 'Cost'", text)
+        self.assertIn("Cache Read", text)
+        zh = "\n".join(analyze_usage.notes(res["column_mapping"], res["skipped_rows"], "zh-TW", res["load_info"]))
+        self.assertIn("排除 1 筆", zh)
+
+    def test_explicit_input_map_still_wins(self):
+        rows, mapping, _ = analyze_usage.load_rows(self.p, {"input": "Total Tokens"})
+        self.assertEqual(mapping["input"], "Total Tokens")
+        self.assertEqual(len(rows), 4)                 # no split mode, so no cloud-agent filter either
+
+    def test_numeric_cost_column_still_used(self):
+        p = os.path.join(tempfile.mkdtemp(), "n.csv")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("timestamp,bot,input_tokens,cost_usd\n2026-10-01T00:00:00Z,a,1000,0.25\n")
+        info = {}
+        rows, mapping, _ = analyze_usage.load_rows(p, info=info)
+        self.assertEqual(mapping["cost"], "cost_usd")
+        self.assertEqual((rows[0]["cost"], info["cost_text_rows"]), (0.25, 0))
+
+    def test_non_numeric_token_value_is_an_error(self):
+        p = os.path.join(tempfile.mkdtemp(), "bad.csv")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("timestamp,bot,input_tokens,output_tokens\n2026-10-01T00:00:00Z,a,1000,lots\n")
+        with self.assertRaises(analyze_usage.UsageError):
+            analyze_usage.load_rows(p)
+
+
 if __name__ == "__main__":
     unittest.main()

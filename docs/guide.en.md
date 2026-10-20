@@ -266,7 +266,7 @@ The model gives direction and magnitude, not an exact bill. Keep these limits in
 - Vendors that charge more for cache writes than for plain input (OpenAI, Anthropic) are modeled at the cache-read price only, which slightly understates cost.
 - Quality is not in the cost formula: attention degrades in long contexts and knowledge is lost in hand-overs; judge those separately.
 - Latency is not modeled: every extra layer adds a round of waiting.
-- The Grok Bot usage CSV column names are not yet verified; check the column mapping and calibration error the first time you use a real export.
+- The Grok Bot usage-events export is read as is (three prompt columns summed, cloud-agent rows left out, text cost priced from tokens), but it has no bot or chat column, so all calls form one context unless you add a bot column. Check the column mapping and calibration error the first time you use a real export.
 - Prices change; estimated savings overlap and cannot simply be added up.
 
 Recent multi-agent research:

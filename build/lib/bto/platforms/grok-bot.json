@@ -1,0 +1,9 @@
+{
+  "name": "Grok Bot",
+  "pricing": "../pricing/grok-4.7.json",
+  "span_cap": 6,
+  "notes": [
+    "A group holds at most 6 bots, so the span limit is 6. / 一個群組最多放 6 個 Bot，所以控制幅度上限為 6。",
+    "Users cannot rewrite a bot's context; the levers are channels, writing to files, fewer wake-ups and fresh chats. / 使用者無法改寫 Bot 的上下文；能用的槓桿是溝通管道、程式寫檔、減少喚醒與開新 chat。"
+  ]
+}

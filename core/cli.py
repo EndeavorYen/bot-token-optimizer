@@ -175,7 +175,7 @@ def _run(a, lang, pricing, cap):
         if a.json:
             _dump(res)
         else:
-            print("\n".join(analyze_usage.notes(res["column_mapping"], res["skipped_rows"], lang)) + "\n")
+            print("\n".join(analyze_usage.notes(res["column_mapping"], res["skipped_rows"], lang, res.get("load_info"))) + "\n")
             print(analyze_usage.report_md(res, lang))
     elif a.cmd == "init":
         orgspec.run_init(a.out, lang)

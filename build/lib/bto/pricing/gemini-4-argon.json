@@ -1,0 +1,15 @@
+{
+  "vendor": "google",
+  "model": "gemini-4-argon",
+  "checked": "2026-10-20",
+  "source": "https://ai.google.dev/gemini-api/docs/pricing",
+  "note": "Google flagship. Prices double from 2026-12-01 ($4 / $0.20 / $20). Output includes thinking tokens. Implicit caching, no storage fee.",
+  "currency": "USD",
+  "per_million": {
+    "input": 2.0,
+    "cached_input": 0.1,
+    "output": 10.0
+  },
+  "long_context_threshold": null,
+  "long_context_per_million": null
+}

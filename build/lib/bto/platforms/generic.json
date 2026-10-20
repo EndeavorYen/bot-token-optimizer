@@ -1,0 +1,8 @@
+{
+  "name": "Generic bot platform",
+  "pricing": "../pricing/grok-4.7.json",
+  "span_cap": 8,
+  "notes": [
+    "No hard group limit; 8 is a common span-of-control rule of thumb. Point 'pricing' at the preset for your model. / 沒有硬性群組上限；8 是常見的控制幅度經驗值。請把 pricing 改成你使用的模型。"
+  ]
+}
