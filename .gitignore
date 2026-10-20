@@ -4,3 +4,7 @@ __pycache__/
 # 使用者自己的 usage 資料不要提交
 *.usage.csv
 org_measured.json
+
+# pip install . 產生的建置產物
+build/
+*.egg-info/
