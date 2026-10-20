@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "bot-token-optimizer: token cost modeling for teams of persistent bots"
+authors:
+  - alias: EndeavorYen
+type: software
+license: MIT
+repository-code: "https://github.com/EndeavorYen/bot-token-optimizer"
+url: "https://endeavoryen.github.io/bot-token-optimizer/calculator/"
+version: 0.2.0
+date-released: 2026-10-20
+keywords:
+  - llm
+  - bots
+  - token cost
+  - multi-agent
+  - organization design

@@ -7,4 +7,4 @@ chief -> researcher : 6/day 800
 researcher -> writer : 6/day 1500
 writer -> reviewer : 6/day 1500
 reviewer -> chief : 2/day 600
-group all-hands : chief researcher writer reviewer : 10/day 80
+group all-hands : chief researcher writer reviewer : 8/day 80

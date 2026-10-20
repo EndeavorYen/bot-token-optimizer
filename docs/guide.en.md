@@ -171,7 +171,11 @@ Eight anti-patterns account for most of the waste, and each can be fixed directl
 
 The sample team in `samples/` shows the effect of fixing them (`bto compare samples/org_before.txt samples/org_after.txt`):
 
-![Simulated redesign: 7-day cost $257 to $25](images/before-after.en.svg)
+![Where the saving comes from: $257 to $23 a week](images/waterfall.en.svg)
+
+Each bar is that change's average saving over all 720 orders of applying the six changes (its Shapley value), so the bars add up exactly. The same redesign saves 85–97% on every pricing preset:
+
+![The redesign saves 85–97% on every model](images/models.en.svg)
 
 These are simulated numbers for example data, not a measured bill. The [advisor demo](advisor-demo.en.md) walks through a full consultation.
 

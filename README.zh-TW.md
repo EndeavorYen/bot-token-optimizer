@@ -9,16 +9,46 @@
 <p align="center">
   <a href="https://github.com/EndeavorYen/bot-token-optimizer/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/EndeavorYen/bot-token-optimizer/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Python 3.9 以上，只用標準函式庫" src="https://img.shields.io/badge/python-3.9%2B%20%C2%B7%20stdlib%20only-3776AB">
+  <img alt="8 個價格設定" src="https://img.shields.io/badge/presets-xAI%20%C2%B7%20OpenAI%20%C2%B7%20Anthropic%20%C2%B7%20Google-0F8B8D">
   <a href="https://endeavoryen.github.io/bot-token-optimizer/calculator/"><img alt="網頁計算器" src="https://img.shields.io/badge/try%20it-web%20calculator-2E86AB"></a>
   <img alt="MIT 授權" src="https://img.shields.io/badge/license-MIT-F2A541">
 </p>
 
-**bot 的用量越來越兇，卻不知道錢花到哪裡？** 大部分 token 不是花在工作本身，而是花在 bot 互相喚醒、轉傳訊息，以及反覆重讀一份越來越大的上下文。這個專案幫你找出 token 花在哪裡，並告訴你怎麼調整 bot 之間的分工和溝通，讓它們不再白白燒錢。
+**bot-token-optimizer** 找出一群常駐 bot 把 token 花在哪裡，並告訴你怎麼止血。它讀取你的用量匯出檔，模擬 bot 之間如何互相喚醒，再依省錢多寡排出該做的改變：公式可以檢查、數字可以重現，給 bot 的指令可以直接貼上。
 
-- 📊 **分析**：讀進 usage CSV，依 bot、依 chat 算出喚醒次數、上下文成長、浪費的呼叫，以及何時會碰到長上下文計價門檻。
-- 🧮 **模擬**：用幾行文字描述你的團隊，改組之前先比較不同方案的成本。
-- 🤖 **顧問 bot**：用量暴增時丟一份 CSV 給它，拿到最省的三項改善。
-- 🌐 **[網頁計算器](https://endeavoryen.github.io/bot-token-optimizer/calculator/)**：不用安裝，公式完全相同。
+<p align="center">
+  <a href="https://endeavoryen.github.io/bot-token-optimizer/calculator/">
+    <img src="docs/images/calculator.zh-TW.png" alt="網頁計算器：選一個團隊、回答六個問題，就能看到每週帳單、每則訊息流動的即時團隊圖，以及最省錢的改善項目" width="92%">
+  </a>
+  <br>
+  <sub><a href="https://endeavoryen.github.io/bot-token-optimizer/calculator/"><b>打開網頁計算器</b></a>：不用安裝，和指令列工具使用同一套模型。</sub>
+</p>
+
+## 目錄
+
+- [重點總覽](#重點總覽)
+- [這適合你嗎？](#這適合你嗎)
+- [為什麼 bot 特別燒 token](#為什麼-bot-特別燒-token)
+- [成本模型](#成本模型)
+- [改完之後長什麼樣子](#改完之後長什麼樣子)
+- [運作方式](#運作方式)
+- [快速開始](#快速開始)
+- [顧問 bot](#顧問-bot)
+- [價格與平台設定](#價格與平台設定)
+- [數字如何驗證](#數字如何驗證)
+- [常見問題](#常見問題) · [限制](#限制) · [參與貢獻](#參與貢獻) · [引用](#引用)
+
+## 重點總覽
+
+| 習慣 | 對帳單的影響 | 說明 |
+| --- | --- | --- |
+| 只轉話的 leader | token 是直接交接的 **1.92 倍** | [轉話 leader](#轉話-leader) |
+| 「寫到 board，再通知」 | 每則通知最多 **2.00 倍** token | [讀 board 的來回](#讀-board-的來回) |
+| 「OK」「收到」回覆 | 每一則都讓接收方**完整重讀一次上下文** | [成本模型](#成本模型) |
+| 從不開新的 chat | 14 天成本是「到 90K 就交接」的 **3 倍** | [交接](#交接) |
+| 以上全部改掉（範例團隊） | **每週 $257 → $23，0.09 倍** | [改組結果](#改完之後長什麼樣子) |
+
+數字由 [`core/`](core/) 的模型對 [`samples/`](samples/) 範例資料模擬而得，每次修改都會由 CI 重新產生。
 
 ## 這適合你嗎？
 
@@ -32,65 +62,109 @@
 - [ ] 有個所有 bot 都在裡面貼進度的群組。
 - [ ] 有個主管 bot 要讀每個人的完整報告。
 
----
+這個專案針對的是**常駐 bot**：長時間運作、會被反覆喚醒、上下文不斷累積。一次性跑完就結束的 agent 任務不會碰到這些成本。
 
 ## 為什麼 bot 特別燒 token
 
-bot 是常駐的。**它每次被喚醒，都要重讀一次完整上下文**，所以帳單遵循一條規則：
-
-```
-成本 ≈ 喚醒次數 × 每次喚醒的呼叫輪數 × 上下文大小   （再加上它寫出的 output）
-```
-
-縮短訊息幫助不大，因為一則訊息和它觸發重讀的上下文相比微不足道。真正有影響的只有兩件事：**bot 之間多常互相喚醒**，以及**每個 bot 的上下文長到多大**。這兩件事，都取決於你的 bot 怎麼分工、怎麼溝通。
+常駐 bot **每次被喚醒，都要重讀一次完整上下文**。兩個字的訊息寫起來便宜、收起來昂貴，因為接收方要為它在這個 chat 裡看過的一切付費。所以帳單只由兩件事決定：bot 之間多常互相喚醒，以及每份上下文長到多大。這兩件事，都取決於你的 bot 怎麼分工、怎麼溝通。
 
 <p align="center">
   <img src="docs/images/context-growth.zh-TW.svg" alt="上下文會一直長大，直到你重建它：14 天成本從不重建 $17.47，到 90K 就交接 $5.71" width="100%">
 </p>
 
-不處理的話，bot 的上下文只會變大，每次喚醒都更貴；超過 200K token 後，Grok 會把整個請求改用兩倍單價計費。上下文到 90K 就交接給新的 chat，這個 bot 的 14 天成本降到約**三分之一**。
+不處理的話，上下文只會變大，每次喚醒都比上一次貴；超過 200K token 後，Grok 會把整個請求改用兩倍單價計費。在這個例子裡，上下文到 90K 就交接給新的 chat，可以把這個 bot 的 14 天成本從 **$17.47 降到 $5.71**。
 
-## 四個讓帳單悄悄翻倍的習慣
+## 成本模型
 
-### 1. 只轉話的 leader
+對一個由多個 bot $b$ 組成的團隊，模型估算一段期間的成本為
 
-<p align="center">
-  <img src="docs/images/relay-leader.zh-TW.svg" alt="只轉話的 leader 成本 1.92 倍；會彙整的 leader 成本 0.90 倍" width="100%">
-</p>
+$$
+\text{成本} \;\approx\; \sum_{b} \Big(\, W_b \, R_b \, \overline{C}_b \, p_b \;+\; W_b \, O_b \, o \,\Big),
+\qquad p_b = h_b\, r + (1 - h_b)
+$$
 
-每多一層，每個任務就多兩次喚醒：派工下去一次，回報上來一次。只轉話的 leader 成本是直接交接的 **1.92 倍**。leader 只有在**壓縮資訊**時才值得存在：收六份報告，往上只交一份摘要。這時整個團隊反而比扁平更便宜（0.90 倍），因為最貴的總管只被叫醒一次，而不是六次。
+prompt 超過廠商的長上下文門檻時，所有價格再乘上倍數 $\lambda$。
 
-### 2. 「寫到 board，再通知對方」
+| 符號 | 意義 | 常見數值 |
+| --- | --- | --- |
+| $W$ | 每天被喚醒的次數（收到的訊息，加上使用者與排程） | 5～20 |
+| $R = 1 + k$ | 每次喚醒的呼叫輪數：讀訊息一輪，加上自己工作的 $k$ 輪工具呼叫 | 1～4 |
+| $\overline{C}$ | 期間內的平均上下文；收到、讀進、寫出的內容都會讓它變大 | 10K～300K |
+| $h$、$r$ | 快取命中率；快取價相對 input 價的比例 | 0.8；0.05～0.25 |
+| $O$、$o$ | 每次喚醒的 output（含推理 token）；output 價相對 input 價的倍數 | 300；3～5 |
+| $\lambda$ | 長上下文倍數（Grok 在 200K 起 2 倍、Claude Haiku 在 100K 以上 5 倍…） | 1～5 |
 
-<p align="center">
-  <img src="docs/images/board-overhead.zh-TW.svg" alt="寫 board 再通知最多多花 2 倍 token" width="100%">
-</p>
+以下所有結論都來自三個推論：訊息長度 $m$ 跟 $C$ 相比微不足道，所以縮短訊息幫助不大；每多一次喚醒就多付一整份 $C$；bot 讀進來的內容，之後每次喚醒都還在 $C$ 裡。
 
-看起來很省：用一則短通知代替長訊息。但接收方處理這則通知時，還是要重讀完整上下文；去讀完 board 之後，又再重讀一次。而讀進來的內容，照樣會留在它的上下文裡。對很少做其他事的 bot（k = 0）來說，這等於 **2 倍 token**。小內容直接放進訊息；大內容在通知中寫清楚要讀哪一段。
+### 讀 board 的來回
 
-### 3. 「OK」「收到」「謝謝」
+接收方用工具呼叫去 board 讀內容時，每則通知會多一次完整讀取。設 bot 每次喚醒為自己工作做 $k$ 輪：
 
-一則只有兩個 token 的確認訊息，會叫醒接收方，而接收方要付出讀**整份上下文**的代價才能看到它。在 bot 的指令中禁止純確認訊息，並把通知合併。
+$$
+\frac{\text{寫 board 的 token}}{\text{直接傳內容的 token}} =
+\begin{cases}
+\dfrac{k+2}{k+1} & \text{發送方先寫 board 再通知} \\[2ex]
+1 + \dfrac{1}{2(k+1)} & \text{寫 board 與通知同一步完成}
+\end{cases}
+$$
 
-### 4. 一個主管讀每個人的完整報告
+<p align="center"><img src="docs/images/board-overhead.zh-TW.svg" alt="寫 board 再通知最多多花 2 倍 token" width="100%"></p>
 
-<p align="center">
-  <img src="docs/images/span-of-control.zh-TW.svg" alt="回報越短，最佳控制幅度越大" width="100%">
-</p>
+這個倍數跟訊息長度無關，只看 bot 每次喚醒做多少事，所以很少做其他事的 bot（$k = 0$）要付兩倍。`bto board --k 1`
 
-每則回報都會叫醒主管，也都會留在它的上下文裡。一個主管最適合帶幾個 bot，大約是 **k\* ≈ 1 + √(1 + 2·C0 / m)**：把完整報告改成一行狀態加檔案路徑，一個主管就能帶更多 bot，層級也更少。平台還會有硬限制，例如 Grok Bot 一個群組最多 6 個 bot。
+### 轉話 leader
+
+設 worker、leader、總管的上下文為 $C_w$、$C_\ell$、$C_c$。直接交接一個任務的成本是 $C_w + C_c$，經過轉話 leader 則是 $C_w + 2C_\ell + C_c$。若有 $n$ 個平行子任務，彙整成一份摘要的 leader 成本為 $nC_w + (n+1)C_\ell + C_c$，扁平則是 $nC_w + nC_c$。
+
+<p align="center"><img src="docs/images/relay-leader.zh-TW.svg" alt="只轉話的 leader 成本 1.92 倍；會彙整的 leader 成本 0.90 倍" width="100%"></p>
+
+只有在替更昂貴的讀者**壓縮資訊**時，多一層才划算。`bto scenario relay` · `bto scenario aggregate --n 6`
+
+### 控制幅度
+
+主管每收到一則回報就被喚醒一次，回報也會累積在它的上下文裡。設主管基礎上下文為 $C_0$、每則回報 $m$ token，最省錢的「每個主管帶幾個 bot」為
+
+$$
+k^{*} \;\approx\; 1 + \sqrt{1 + \frac{2\,C_0}{m}}
+$$
+
+<details>
+<summary>推導</summary>
+
+主管收齊 $k$ 則回報的成本為 $\sum_{i=1}^{k} (C_0 + i\,m) \approx k\,C_0 + \tfrac{1}{2} m k^2$。管理 $N$ 個 worker 的樹大約需要 $N/(k-1)$ 個主管，所以總成本為
+
+$$
+f(k) = \frac{N}{k-1}\Big(k\,C_0 + \tfrac{1}{2}\,m\,k^2\Big)
+$$
+
+令 $f'(k) = 0$ 得到 $k^2 - 2k - 2C_0/m = 0$，其正根即為 $k^{*}$。`bto span` 也會用數值方法求解精確的整數問題，並預設加上每個主管接收自己任務時的那次喚醒；不計這次喚醒時，數值最佳解與 $k^{*}$ 相差不超過一個 bot。
+</details>
+
+<p align="center"><img src="docs/images/span-of-control.zh-TW.svg" alt="回報越短，最佳控制幅度越大" width="100%"></p>
+
+把完整報告換成一行狀態加檔案路徑，一個主管能帶的 bot 大約變成四倍。平台還會有硬限制（Grok Bot 一個群組最多 6 個）。`bto span --n 12 --c0 30000 --m 1000`
+
+### 交接
+
+把 bot 移到新的 chat，要先讀一次舊上下文寫出 $H$ token 的摘要，再加上新上下文 $C_{\text{new}} = C_{\text{base}} + H$ 的第一次讀取。之後每次喚醒省下 $R\,p\,(C - C_{\text{new}})$，所以交接會在以下次數的喚醒後回本：
+
+$$
+n^{*} \;=\; \frac{p\,C + H\,o + C_{\text{new}}}{R\,p\,\big(C - C_{\text{new}}\big)}
+$$
+
+以 Grok、基礎設定 8K、摘要 3K、快取命中 80% 計算，$n^{*}$ 在 50K 時是 2.6 次、100K 時 1.7 次、150K 時 1.4 次。只看 token，交接幾乎都在幾次喚醒內回本；真正的限制是摘要中遺失的知識與交接的人力，所以實務上採定期交接。`bto reset --c 150000 --c-base 8000`
 
 ## 改完之後長什麼樣子
 
-<p align="center">
-  <img src="docs/images/before-after.zh-TW.svg" alt="模擬改組：7 天成本從 $257 降到 $25" width="100%">
-</p>
+[`samples/`](samples/) 的範例團隊有轉話 leader、「OK」回覆、來回讀 board、吵雜的群組、給總管的完整報告，以及從不重建的上下文。下圖把總節省拆給六項改變。因為各項改變會互相影響（例如拿掉一個 bot 會改變其他 bot 被群組喚醒的頻率），每根橫條是該項改變在全部 720 種套用順序下的平均節省，也就是它的 Shapley 值，所以加總恰好等於總節省。
 
-[`samples/`](samples/) 裡的範例團隊有轉話 leader、「OK」回覆、來回讀 board、吵雜的群組，以及從不重建的上下文。改掉這五件事後，**模擬**的一週成本從 **$257 降到 $25（0.10 倍）**。這是模型對範例資料的計算結果，不是實際帳單；完整的諮詢過程請看[顧問示範](docs/advisor-demo.zh-TW.md)，也可以自己跑跑看：
+<p align="center"><img src="docs/images/waterfall.zh-TW.svg" alt="省下的錢從哪裡來：每週 $257 降到 $23" width="100%"></p>
 
-```bash
-bto compare samples/org_before.txt samples/org_after.txt --lang zh-TW
-```
+不管用哪個模型，同樣的習慣都在浪費錢。便宜的模型能壓低帳單，卻壓不低被浪費的比例；長上下文加價越陡的模型，從定期交接得到的好處越大（Claude Haiku：−97%）。
+
+<p align="center"><img src="docs/images/models.zh-TW.svg" alt="在每個模型上，改組都省下 85%～97%" width="100%"></p>
+
+這些是模型對範例資料的模擬結果，不是實際帳單。[顧問示範](docs/advisor-demo.zh-TW.md)有一次完整的諮詢過程；比較結果可以用 `bto compare samples/org_before.txt samples/org_after.txt` 重現。
 
 ## 運作方式
 
@@ -98,14 +172,34 @@ bto compare samples/org_before.txt samples/org_after.txt --lang zh-TW
 flowchart LR
     A[Usage CSV<br/>從 bot 平台匯出] --> B[bto analyze<br/>依 chat 分開的上下文、成長、<br/>已做過的交接、浪費模式]
     B --> C{模型誤差<br/>在 ±15% 內？}
-    C -- 是 --> D[org.txt<br/>補上誰跟誰溝通]
+    C -- 是 --> D[org.txt<br/>誰跟誰溝通]
     C -- 否 --> E[只採用實測發現]
     D --> F[bto org<br/>診斷與預估省量]
     F --> G[bto compare<br/>比較改組前後]
     G --> H[執行改善，<br/>一週後再匯出驗證]
 ```
 
-分析器把**每個 chat 視為獨立的上下文**，會偵測**你已經做過的交接**（上下文突然變小），避免它們扭曲成長速度，而且 **output 與推理 token** 也一起計價。接著它用你的真實花費校正模型：模型能把實際花費重現到 ±15% 以內，它對改組方案的預測才值得參考。
+分析器把**每個 chat 視為獨立的上下文**，會偵測**你已經做過的交接**（上下文突然變小），避免它們扭曲成長速度，而且 **output 與推理 token** 也一起計價。接著它用你的真實花費校正模型；只有在模型能把實際花費重現到 ±15% 以內時，它對改組方案的預測才值得參考。
+
+診斷結果長這樣（節錄）：
+
+```text
+$ bto org samples/org_before.txt --platform grok-bot --lang zh-TW
+
+## 組織成本評估（7 天）
+總成本：約 128,548,279 token 等值（約 $257.10），其中 output 約 $0.89
+
+| Bot        | 目前 C  | 期末 C  | 喚醒/天 | 呼叫輪數/天 | 成本占比 | 等值美元 |
+| researcher | 30,000  | 348,430 | 14.0    | 70.0        | 48%      | $124.39  |
+| writer     | 30,000  | 324,070 | 14.0    | 56.0        | 35%      | $90.48   |
+| chief      | 100,000 | 249,100 | 11.0    | 22.0        | 12%      | $30.75   |
+...
+最長交接鏈：5 跳（chief → lead → researcher → writer → reviewer → chief）
+
+1. [ack] researcher：writer → researcher 每天 6 則、平均 15 token，疑似「收到/OK」確認訊息。…
+2. [ack] writer：reviewer → writer 每天 6 則、平均 15 token，疑似「收到/OK」確認訊息。…
+3. [board_tool_read] researcher：被通知後用 tool 讀 board，每次通知多一輪完整上下文。…
+```
 
 ## 快速開始
 
@@ -116,26 +210,18 @@ bto --help
 
 不需要任何相依套件。也可以 clone repo 後，用 `python3 core/cli.py` 取代 `bto`。
 
-```bash
-# token 花到哪裡去了？
-bto analyze usage.csv --platform grok-bot --org-out org.json --lang zh-TW
+| 想做的事 | 指令 |
+| --- | --- |
+| 找出 token 花到哪裡 | `bto analyze usage.csv --platform grok-bot --org-out org.json` |
+| 用問答描述你的團隊 | `bto init` |
+| 診斷團隊 | `bto org org.txt --platform grok-bot` |
+| 比較改組方案 | `bto compare org.txt org_redesign.txt` |
+| 讀 board 的來回值不值得？ | `bto board --k 1` |
+| 一個主管該帶幾個？ | `bto span --n 12 --c0 30000 --m 1000` |
+| 該開新的 chat 了嗎？ | `bto reset --c 150000 --c-base 8000` |
+| 列出價格與平台設定 | `bto presets` |
 
-# 回答幾個問題來描述你的團隊（會寫出 org.txt 和 org.json）
-bto init --lang zh-TW
-
-# 診斷團隊、比較改組方案
-bto org org.txt --platform grok-bot --lang zh-TW
-bto compare org.txt org_redesign.txt --lang zh-TW
-
-# 常見問題
-bto board --k 1                        # 寫 board 再通知值不值得？
-bto span --n 12 --c0 30000 --m 1000    # 一個主管該帶幾個？
-bto reset --c 150000 --c-base 8000     # 該交接給新的 chat 了嗎？
-```
-
-報告支援英文和繁體中文：`--lang en|zh-TW`。也可以設定環境變數 `BTO_LANG=zh-TW`，或讓它依系統語系自動判斷。
-
-一個團隊只要幾行 `org.txt`：
+報告支援英文與繁體中文（`--lang en|zh-TW`；預設依 `BTO_LANG`，再依系統語系）。一個團隊只要幾行 `org.txt`：
 
 ```text
 settings horizon=7 soft_cap=120k
@@ -148,25 +234,23 @@ writer -> researcher : 6/day 15        # 「收到」回覆
 group team : chief researcher writer : 10/day 900
 ```
 
-寫錯時會標出行號，並一次列出所有問題（不存在的 bot 名稱、欄位名稱打錯、負數等）。
-
-CSV 欄位會自動辨識（`timestamp`、`bot_name`、`chat_id`、`input_tokens`、`cached_input_tokens`、`output_tokens`、`reasoning_tokens`、`cost_usd` 等）。對不上時用 `--map`，例如 `--map time=日期 --map bot=Bot --map input=輸入token`。
+寫錯時會一次列出所有問題並標明行號。CSV 欄位會自動辨識（`timestamp`、`bot_name`、`chat_id`、`input_tokens`、`cached_input_tokens`、`output_tokens`、`reasoning_tokens`、`cost_usd` 等）；其他名稱用 `--map time=日期 --map bot=Bot` 指定。
 
 ## 顧問 bot
 
-把這個 repo 變成 bot 平台裡隨叫隨到的顧問。用量暴增或準備改組時呼叫它；它會一次問完需要的資訊，所有數字都只由經過測試的腳本產生。請看[完整的諮詢範例](docs/advisor-demo.zh-TW.md)。
+把這個 repo 變成 bot 平台裡隨叫隨到的顧問。它會一次問完需要的資訊，所有數字都只來自經過測試的腳本。請看[完整的諮詢範例](docs/advisor-demo.zh-TW.md)。
 
 | 什麼時候叫它 | 它會做什麼 |
 | --- | --- |
 | 用量消耗太快 | 分析 CSV、校正模型、找出浪費和最貴的 bot，給前三項改善 |
 | 想要改組 | 建立現況與 1～2 個方案，比較總成本、熱點與層數 |
-| 想問「如果…會怎樣」 | 用對應的公式回答：board、leader、控制幅度、重建 |
+| 想問「如果…會怎樣」 | 用對應的公式回答：board、leader、控制幅度、交接 |
 
 Grok Bot 的設定方式：[`adapters/grok-bot/`](adapters/grok-bot/README.zh-TW.md)。
 
 ## 價格與平台設定
 
-用 `bto presets` 列出全部設定。價格是 2026-10-20 從各家官方價目頁查詢的，使用前請再確認。
+價格是 2026-10-20 對照各家官方價目頁查詢的，依賴美元數字前請再確認。
 
 | 設定名稱 | 每百萬 token：input／快取／output | 長上下文計價 |
 | --- | --- | --- |
@@ -181,48 +265,83 @@ Grok Bot 的設定方式：[`adapters/grok-bot/`](adapters/grok-bot/README.zh-TW
 
 平台設定：`grok-bot`（群組上限 6）和 `generic`（控制幅度上限 8）。用 `--pricing <設定名稱>` 可以讓任何平台搭配任何模型。
 
+## 數字如何驗證
+
+| 檢查 | 保證什麼 |
+| --- | --- |
+| 53 項單元測試 | README 與指引中的每條公式、每張表，都能從手算值重現 |
+| 1,083 項一致性檢查 | 網頁計算器的結果與 Python 模型完全一致；在 192 種回答組合下，計算器的任何改善都不會讓帳單變高 |
+| CI 重新產生圖表 | 每次推送都依模型重新產生所有圖表，圖表過期時 CI 會失敗 |
+| 校正 | `bto analyze` 重現合成範例實際花費的誤差為 2.1%；用在你的資料上時會回報誤差，讓你自行判斷 |
+| Shapley 歸因 | 節省拆解的加總恰好等於總節省，而且與改變的套用順序無關 |
+
 ## 常見問題
 
-**有 prompt caching，這些問題不就沒了？** 沒有。快取降低的是每次重讀的單價（依廠商約為 input 價的 5%～25%），但重讀的次數仍然是喚醒次數乘以上下文大小，而且很多廠商在 prompt 超過長上下文門檻後會加價。模型已經把快取命中率算進去。
+<details>
+<summary><b>有 prompt caching，這些問題不就沒了？</b></summary>
 
-**我的平台會自動摘要或裁切上下文。** 那麼實際成長會比模型假設的慢。分析器是從你的資料量測成長速度，所以校正結果會反映出來；關於喚醒次數和轉話的建議依然適用。
+沒有。快取降低的是每次重讀的單價（依廠商約為 input 價的 5%～25%），但重讀次數仍然是喚醒次數乘以上下文大小，而且很多廠商在 prompt 超過長上下文門檻後會加價。模型已經把快取命中率算進去。
+</details>
 
-**我的平台是訂閱制，不是按 token 計費。** 那麼美元數字代表「等值成本」，仍然能正確比較方案的優劣；而且 token 用量通常就是決定你額度或速率限制的因素。
+<details>
+<summary><b>我的平台會自動摘要或裁切上下文。</b></summary>
 
-**這是講一般的 agent 嗎？** 這個專案針對的是**常駐 bot**：長時間運作、會被反覆喚醒、上下文會不斷累積。一次性跑完就結束的 agent 任務不會碰到這些成本。
+那麼實際成長會比模型假設的慢。分析器是從你的資料量測成長速度，所以校正結果會反映出來；關於喚醒次數與轉話的建議依然適用。
+</details>
 
-**準確度如何？** 它提供的是方向和量級。在合成範例上，模型重現實際花費的誤差約 2%，但這份資料本身就是依照模型假設產生的；請用你自己的資料跑 `bto analyze`，看看校正誤差。
+<details>
+<summary><b>我的平台是訂閱制，不是按 token 計費。</b></summary>
 
-**我的 CSV 會被傳到別的地方嗎？** 不會。所有計算都在本機執行，沒有任何網路連線。
+那麼美元數字代表「等值成本」，仍然能正確排出方案的優劣；而且 token 用量通常就是決定你額度或速率限制的因素。
+</details>
+
+<details>
+<summary><b>準確度如何？</b></summary>
+
+它提供的是方向和量級。在合成範例上，模型重現實際花費的誤差約 2%，但這份資料本身就是依照模型假設產生的。請用你自己的資料執行 `bto analyze`，看看校正誤差。
+</details>
+
+<details>
+<summary><b>我的 CSV 會被傳到別的地方嗎？</b></summary>
+
+不會。所有計算都在本機執行，沒有任何網路連線；網頁計算器也完全在你的瀏覽器裡運算。
+</details>
+
+## 限制
+
+模型提供的是方向和量級，不是精確帳單。它假設每輪呼叫都重讀完整上下文，並把兩次交接之間的成長視為線性。它沒有把長上下文與交接造成的品質損失算進去，也沒有計入部分廠商額外收取的快取寫入費用。目前的校正只用過合成資料，Grok Bot usage CSV 的欄位名稱也尚未用真實匯出檔驗證。詳見[指引](docs/guide.zh-TW.md#限制與參考文獻)。
 
 ## Repo 結構
 
 ```
-core/                     bto 套件：成本模型、CSV 分析、org.txt 解析、指令列工具
-core/pricing/             價格設定（8 個模型）
-core/platforms/           平台設定（grok-bot、generic）
-adapters/grok-bot/        顧問 bot 的設定方式與指令（中文 / English）
-docs/guide.zh-TW.md       完整指引：模型、公式、架構決策、反模式
-docs/advisor-demo.zh-TW.md 一次諮詢的完整範例（實際輸出）
-docs/calculator/          網頁計算器（GitHub Pages），與 Python 模型交叉驗證
-docs/images/              圖表，由 make_figures.py 依模型產生
-samples/                  範例團隊、示範團隊與合成的 usage CSV
-tests/                    單元測試，以及計算器一致性檢查
+core/                       bto 套件：成本模型、CSV 分析、org.txt 解析、指令列工具
+core/pricing/               價格設定（8 個模型）
+core/platforms/             平台設定（grok-bot、generic）
+adapters/grok-bot/          顧問 bot 的設定方式與指令（中文 / English）
+docs/guide.zh-TW.md         完整指引：模型、公式、架構決策、反模式
+docs/advisor-demo.zh-TW.md  一次諮詢的完整範例（實際輸出）
+docs/calculator/            網頁計算器（GitHub Pages），與 Python 模型交叉驗證
+docs/images/                圖表，由 make_figures.py 依模型產生
+samples/                    範例團隊、示範團隊與合成的 usage CSV
+tests/                      單元測試與計算器一致性檢查
 ```
 
 ## 參與貢獻
 
 目前最有幫助的是真實資料：你的平台 usage 匯出檔的欄位名稱，以及你得到的校正誤差。詳見 [CONTRIBUTING.md](CONTRIBUTING.md#中文)。
 
-## 限制
+## 引用
 
-模型提供的是方向和量級，不是精確帳單。它假設每輪呼叫都重讀完整上下文，並把兩次交接之間的成長視為線性。它沒有把長上下文與交接造成的品質損失算進去，也沒有計入部分廠商額外收取的快取寫入費用。目前的校正只用過合成資料，Grok Bot usage CSV 的欄位名稱也尚未用真實匯出檔驗證。詳見[指引](docs/guide.zh-TW.md#限制與參考文獻)。
+如果這個專案對你有幫助，歡迎引用（GitHub 的「Cite this repository」按鈕會讀取 [`CITATION.cff`](CITATION.cff)）：
 
-## 延伸閱讀
-
-- 📘 [完整指引（中文）](docs/guide.zh-TW.md) · [Full guide (English)](docs/guide.en.md)
-- 🤖 [顧問示範（中文）](docs/advisor-demo.zh-TW.md) · [Advisor demo (English)](docs/advisor-demo.en.md)
-- 🌐 [網頁計算器](https://endeavoryen.github.io/bot-token-optimizer/calculator/)
+```bibtex
+@software{bot_token_optimizer,
+  author = {EndeavorYen},
+  title  = {bot-token-optimizer: token cost modeling for teams of persistent bots},
+  year   = {2026},
+  url    = {https://github.com/EndeavorYen/bot-token-optimizer}
+}
+```
 
 ## 授權
 

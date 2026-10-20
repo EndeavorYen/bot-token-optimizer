@@ -171,7 +171,11 @@ flowchart TD
 
 改掉這些反模式的效果，可以用範例團隊來看（`bto compare samples/org_before.txt samples/org_after.txt`）：
 
-![模擬改組：7 天成本 $257 → $25](images/before-after.zh-TW.svg)
+![省下的錢從哪裡來：每週 $257 → $23](images/waterfall.zh-TW.svg)
+
+每根橫條是該項改變在六項改變全部 720 種套用順序下的平均節省（Shapley 值），所以加總恰好等於總節省。同樣的改組在每個價格設定下都能省 85%～97%：
+
+![在每個模型上，改組都省下 85%～97%](images/models.zh-TW.svg)
 
 這是模型對範例資料的模擬結果，不是實際帳單。[顧問示範](advisor-demo.zh-TW.md)有一次完整的諮詢過程。
 
