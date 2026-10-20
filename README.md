@@ -30,8 +30,61 @@
   <sub><a href="https://endeavoryen.github.io/bot-token-optimizer/calculator/"><b>Open the web calculator</b></a>: no install, same model as the command-line tool.</sub>
 </p>
 
+## Quick start
+
+Two steps: create the Token Advisor in Grok Bot, then tell it your goal. It looks up everything else itself.
+
+### Step 1. Create the Token Advisor (pick one)
+
+**A. From the shared template (fastest).** Open the Token Advisor template <!-- template-link -->(link coming soon) and create a bot from it. Then tell your main bot: *"Give Token Advisor read-only access to every bot's settings, and keep it out of all groups, schedules and automations."* Templates do not always carry that access.
+
+**B. Ask your main bot** (Grok Bot's usual way). Open a **new chat** with the main bot, so this setup is not re-read on its every future wake-up, and paste:
+
+```text
+Please create a new bot with exactly this specification. Do not add, drop or "improve" anything:
+
+1. Name: Token Advisor
+2. Purpose: only when I message it directly, analyze my bot team's token spend and give advice.
+3. Workspace: clone https://github.com/EndeavorYen/bot-token-optimizer into its workspace (folder bot-token-optimizer). It must be able to run python3 there.
+4. Instructions: set the FULL text of adapters/grok-bot/ADVISOR_BOT.en.md from that repo as its instructions, verbatim. Do not summarize, rewrite or drop anything, and add no rules of your own.
+5. Wake-ups: no groups, no schedules, no automations, no notifications. It wakes only when I message it.
+6. Permissions: it may READ every bot's settings (instructions, schedules and automations, groups, chat length) but must not change any bot.
+
+When done, report only: (a) its name, (b) the first line of its instructions, (c) the last "## " heading in them, (d) the output of python3 core/cli.py --version in its workspace, (e) whether it can read the other bots' settings.
+```
+
+**C. Set it up yourself from the repo.**
+1. Create a bot named "Token Advisor".
+2. Paste the whole of [`ADVISOR_BOT.en.md`](adapters/grok-bot/ADVISOR_BOT.en.md) as its instructions ([`ADVISOR_BOT.zh-TW.md`](adapters/grok-bot/ADVISOR_BOT.zh-TW.md) for Chinese), unchanged.
+3. Put this repo in its workspace (`git clone https://github.com/EndeavorYen/bot-token-optimizer`) and allow it to run `python3`.
+4. Give it read-only access to the other bots' settings.
+5. Keep it out of groups, schedules and automations.
+
+**Check, whichever way you chose:** the instructions start with `# Token Cost Advisor (Grok Bot) — playbook` and end with the `## Ground rules` section, `python3 core/cli.py --version` prints `bto 0.6.0` or newer, and it can read the other bots. If something is off, or you want an acceptance test with known answers, see the [step-by-step guide](adapters/grok-bot/SETUP.en.md).
+
+### Step 2. Tell it your goal
+
+Open a new chat with the Token Advisor, attach your Grok Bot usage export (the usage-events CSV), and send one sentence, for example:
+
+```text
+I want 100% of the quota to last the full 7 days. Also, can the organization be leaner? Tell me who is redundant, which bots should be merged or split, and give me the best org chart.
+```
+
+It reads your bots' schedules, instructions and groups itself, then replies with the bottom line in dollars per week, the bot that costs most, concrete changes with their savings, how many days the quota will last, the current and proposed org charts, and one change request for your main bot. Nothing changes until you say "send it". More things to ask it: [everyday use](adapters/grok-bot/SETUP.en.md#step-5-everyday-use).
+
+### Prefer the command line?
+
+```bash
+pip install git+https://github.com/EndeavorYen/bot-token-optimizer
+bto report usage.csv --platform grok-bot --tz +08:00 --quota-days 3 --out memo.md
+bto redesign org.txt --keep chief
+```
+
+No dependencies; or clone the repo and run `python3 core/cli.py` in place of `bto`. Every command is in the [command reference](#command-reference).
+
 ## Contents
 
+- [Quick start](#quick-start)
 - [At a glance](#at-a-glance)
 - [Is this for you?](#is-this-for-you)
 - [Why bots burn tokens](#why-bots-burn-tokens)
@@ -40,7 +93,7 @@
 - [How it works](#how-it-works)
 - [From a usage export to a plan](#from-a-usage-export-to-a-plan)
 - [Redesigning the organization](#redesigning-the-organization)
-- [Quick start](#quick-start)
+- [Command reference](#command-reference)
 - [Advisor bot](#advisor-bot)
 - [Pricing and platform presets](#pricing-and-platform-presets)
 - [How the numbers are checked](#how-the-numbers-are-checked)
@@ -265,14 +318,9 @@ flowchart LR
 
 The formula cannot tell whether two jobs belong together, so every merge carries a check: same tools and access, and neither reviews the other. The advisor vets each one before proposing it. `bto report --org-out` writes a skeleton from the measured contexts and named bots to start from. Because every option is compared under a hand-over policy, the redesign's baseline is lower than `bto org`'s, which assumes contexts are never reset.
 
-## Quick start
+## Command reference
 
-```bash
-pip install git+https://github.com/EndeavorYen/bot-token-optimizer
-bto --help
-```
-
-No dependencies. Or clone the repo and run `python3 core/cli.py` in place of `bto`.
+Install with `pip install git+https://github.com/EndeavorYen/bot-token-optimizer` (no dependencies), or run `python3 core/cli.py` from a clone.
 
 | Task | Command |
 | --- | --- |

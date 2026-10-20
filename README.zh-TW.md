@@ -30,8 +30,61 @@
   <sub><a href="https://endeavoryen.github.io/bot-token-optimizer/calculator/"><b>打開網頁計算器</b></a>：不用安裝，和指令列工具使用同一套模型。</sub>
 </p>
 
+## 快速開始
+
+兩個步驟：在 Grok Bot 建立 Token 顧問，然後告訴它你的目標。其他的它會自己查。
+
+### 步驟 1. 建立 Token 顧問（三選一）
+
+**A. 用分享的範本（最快）。** 打開 Token 顧問範本 <!-- template-link -->（連結即將提供），用它建立 bot。接著對主 bot 說：「*給 Token 顧問讀取（唯讀）所有 bot 設定的權限，並且不要把它加進任何群組、排程或自動化。*」範本不一定帶著這個權限。
+
+**B. 請主 bot 建立**（Grok Bot 最常見的做法）。在主 bot 那裡**開一個新的 chat**（免得這段建立過程在它之後每次被叫醒時都要重讀），貼上：
+
+```text
+請幫我建立一個新的 bot，規格如下，全部照做，不要自行增減或「優化」：
+
+1. 名稱：Token 顧問
+2. 用途：只在我直接呼叫時，分析 bot 團隊的 token 花費並給建議。
+3. 工作區：把 https://github.com/EndeavorYen/bot-token-optimizer clone 到它的工作區（資料夾 bot-token-optimizer），它需要能在那裡執行 python3。
+4. 指令：把 repo 裡 adapters/grok-bot/ADVISOR_BOT.zh-TW.md 的「全文」原封不動設為它的指令。不要摘要、改寫或刪減，也不要加上你自己的規則。
+5. 喚醒方式：不加入群組、不設排程、不設自動化、不訂閱通知。它只在我直接傳訊息給它時才醒來。
+6. 權限：它可以「讀取」所有 bot 的設定（指令、排程與自動化、所在群組、對話長度），但不能修改任何 bot。
+
+完成後只回報：(a) 名稱、(b) 指令第一行、(c) 指令中最後一個「## 」標題、(d) 在工作區執行 python3 core/cli.py --version 的結果、(e) 能不能讀到其他 bot 的設定。
+```
+
+**C. 自己用 repo 建立。**
+1. 建立一個名為「Token 顧問」的 bot。
+2. 把 [`ADVISOR_BOT.zh-TW.md`](adapters/grok-bot/ADVISOR_BOT.zh-TW.md) 的全文原封不動貼成它的指令（英文版為 [`ADVISOR_BOT.en.md`](adapters/grok-bot/ADVISOR_BOT.en.md)）。
+3. 把這個 repo 放進它的工作區（`git clone https://github.com/EndeavorYen/bot-token-optimizer`），並允許它執行 `python3`。
+4. 給它讀取（唯讀）其他 bot 設定的權限。
+5. 不要把它加進群組、排程或自動化。
+
+**不論用哪一種，都確認一下：** 指令第一行是 `# Token 成本顧問（Grok Bot 版）— 工作手冊`、最後一節是 `## 基本守則`；`python3 core/cli.py --version` 顯示 `bto 0.6.0` 或更新；它能讀到其他 bot 的設定。有問題，或想用有標準答案的驗收測試，請看[手把手教學](adapters/grok-bot/SETUP.zh-TW.md)。
+
+### 步驟 2. 告訴它你的目標
+
+開一個和 Token 顧問的新 chat，附上 Grok Bot 的用量匯出檔（usage-events CSV），說一句話就好，例如：
+
+```text
+我希望 100% 額度可以撐滿 7 天。此外組織能不能更精簡？告訴我誰是冗員、哪些 bot 該合併或拆開，並給我最佳的組織圖。
+```
+
+它會自己去讀各 bot 的排程、指令和群組，然後回覆：以每週美元表示的結論、最花錢的 bot、附省量的具體變更、額度能撐幾天、目前與建議的組織圖，以及一則給主 bot 的變更請求。你說「送出」之前，什麼都不會改。其他可以問它的事：[之後的用法](adapters/grok-bot/SETUP.zh-TW.md#步驟-5之後的用法)。
+
+### 偏好命令列？
+
+```bash
+pip install git+https://github.com/EndeavorYen/bot-token-optimizer
+bto report usage.csv --platform grok-bot --tz +08:00 --quota-days 3 --out memo.md --lang zh-TW
+bto redesign org.txt --keep chief --lang zh-TW
+```
+
+不需要任何相依套件；也可以 clone repo 後，用 `python3 core/cli.py` 取代 `bto`。完整指令見[指令參考](#指令參考)。
+
 ## 目錄
 
+- [快速開始](#快速開始)
 - [重點總覽](#重點總覽)
 - [這適合你嗎？](#這適合你嗎)
 - [為什麼 bot 特別燒 token](#為什麼-bot-特別燒-token)
@@ -40,7 +93,7 @@
 - [運作方式](#運作方式)
 - [從用量匯出到計畫](#從用量匯出到計畫)
 - [組織改造](#組織改造)
-- [快速開始](#快速開始)
+- [指令參考](#指令參考)
 - [顧問 bot](#顧問-bot)
 - [價格與平台設定](#價格與平台設定)
 - [數字如何驗證](#數字如何驗證)
@@ -265,14 +318,9 @@ flowchart LR
 
 公式看不出兩份工作適不適合放在一起，所以每項合併都附檢查提醒：需要相同的工具與權限，而且彼此不互相審查。顧問會先逐項把關才提出。`bto report --org-out` 會依量到的上下文與具名 bot 寫出骨架，可以從它開始。因為每個方案都在交接策略下比較，改組的基準會比 `bto org`（假設上下文從不重置）低。
 
-## 快速開始
+## 指令參考
 
-```bash
-pip install git+https://github.com/EndeavorYen/bot-token-optimizer
-bto --help
-```
-
-不需要任何相依套件。也可以 clone repo 後，用 `python3 core/cli.py` 取代 `bto`。
+用 `pip install git+https://github.com/EndeavorYen/bot-token-optimizer` 安裝（不需要相依套件），或在 clone 下來的 repo 裡執行 `python3 core/cli.py`。
 
 | 想做的事 | 指令 |
 | --- | --- |

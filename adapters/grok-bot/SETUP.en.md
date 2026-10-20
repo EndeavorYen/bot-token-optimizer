@@ -2,7 +2,7 @@
 
 **English** · [繁體中文](SETUP.zh-TW.md)
 
-On Grok Bot, a new bot is usually created by asking one of your existing bots. This guide has every message written out, ready to copy and paste. It takes about 10 minutes. Once set up, the advisor looks up your bots' settings itself, so all you tell it is your goal.
+There are three ways to create the Token Advisor: from the shared template, by asking your main bot, or by hand from the repo (all three are in the [README quick start](../../README.md#quick-start)). This guide covers the second, the usual way on Grok Bot, with every message written out, ready to copy and paste. It takes about 10 minutes. The checks in step 2 and the acceptance test in step 3 apply whichever way you chose. Once set up, the advisor looks up your bots' settings itself, so all you tell it is your goal.
 
 | Step | Talk to | What happens |
 |---|---|---|

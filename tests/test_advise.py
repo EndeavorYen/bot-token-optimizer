@@ -377,6 +377,16 @@ class TestSetupGuide(unittest.TestCase):
                 g = self._read(guide)
                 self.assertIn(first, g, (lang, guide))
                 self.assertIn(last_h2, g, (lang, guide))
+        # the README quick starts quote the same anchors and the current version
+        import importlib
+        version = importlib.import_module("cli").__version__
+        for readme, lang in (("README.md", "en"), ("README.zh-TW.md", "zh-TW")):
+            with open(os.path.join(ROOT, readme), encoding="utf-8") as f:
+                text = f.read()
+            playbook = self._read(f"ADVISOR_BOT.{lang}.md").splitlines()
+            self.assertIn(playbook[0], text, readme)
+            self.assertIn([ln for ln in playbook if ln.startswith("## ")][-1], text, readme)
+            self.assertIn(f"bto {version}", text, readme)
 
     def test_acceptance_answer(self):
         csv_path = make_grok_export.generate(os.path.join(tempfile.mkdtemp(), "g.csv"))
