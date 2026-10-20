@@ -170,13 +170,14 @@ The same habits waste money whatever the model. Cheaper models shrink the bill b
 
 <p align="center"><img src="docs/images/models.en.svg" alt="The redesign saves 85–97% on every model" width="100%"></p>
 
-These are simulated figures for example data, not a measured bill. The [advisor demo](docs/advisor-demo.en.md) walks through a full consultation; reproduce the comparison with `bto compare samples/org_before.txt samples/org_after.txt`.
+These are simulated figures for example data, not a measured bill. The [advisor demo](docs/advisor-demo.en.md) walks through a full engagement; reproduce the comparison with `bto compare samples/org_before.txt samples/org_after.txt`.
 
 ## How it works
 
 ```mermaid
 flowchart LR
     A[Usage CSV<br/>from your bot platform] --> B[bto analyze<br/>per-chat contexts, growth,<br/>hand-overs, waste patterns]
+    B --> R[bto report<br/>one-page memo: bottom line,<br/>ranked actions, KPIs]
     B --> C{Model error<br/>within ±15%?}
     C -- yes --> D[org.txt<br/>who talks to whom]
     C -- no --> E[Use measured findings only]
@@ -185,7 +186,7 @@ flowchart LR
     G --> H[Apply, then re-export<br/>a week later]
 ```
 
-The analyzer treats **every chat as its own context**, detects **hand-overs you already made** (sharp drops in context) so they do not distort growth, and prices **output and reasoning tokens** along with input. It then calibrates the model against your real spend; only if the model reproduces it within ±15% are its predictions for a redesign worth trusting.
+The analyzer treats **every chat as its own context**, detects **hand-overs you already made** (sharp drops in context) so they do not distort growth, and prices **output and reasoning tokens** along with input. It then calibrates the model against your real spend; only if the model reproduces it within ±15% are its predictions for a redesign worth trusting. `bto report` turns all of this into a one-page memo: the bottom line in dollars per week, ranked actions labeled measured, modeled or judgment, the data gaps and how to close them, and KPIs with a check date ([example](docs/sample-memo.en.md)).
 
 A diagnosis looks like this (trimmed):
 
@@ -218,7 +219,9 @@ No dependencies. Or clone the repo and run `python3 core/cli.py` in place of `bt
 
 | Task | Command |
 | --- | --- |
-| Find where the tokens go | `bto analyze usage.csv --platform grok-bot --org-out org.json` |
+| One-page memo: where the money goes, what to do first | `bto report usage.csv --platform grok-bot --tz +08:00 --goal-usd-week 300` |
+| Spend per day and what changed | `bto trend usage.csv --tz +08:00` |
+| Per-context detail and an org skeleton | `bto analyze usage.csv --platform grok-bot --org-out org.json` |
 | Describe your team by answering questions | `bto init` |
 | Diagnose the team | `bto org org.txt --platform grok-bot` |
 | Compare a redesign | `bto compare org.txt org_redesign.txt` |
@@ -244,13 +247,13 @@ Mistakes are reported with their line numbers, all at once. CSV columns are dete
 
 ## Advisor bot
 
-Turn this repo into an on-demand advisor inside your bot platform. It asks what it needs in one round of questions and answers only with numbers produced by the tested scripts. See a [full sample consultation](docs/advisor-demo.en.md).
+Turn this repo into an on-demand cost consultant inside your bot platform. It frames your goal, diagnoses, recommends, plans and sets up the check: the bottom line in dollars per week, ranked actions with their evidence and confidence, the decisions only you can make, and KPIs with a check date. Every number comes from the tested tools, and it still answers when the data is imperfect, saying how sure it is and how to find out. See a [sample engagement](docs/advisor-demo.en.md).
 
-| Call it when… | It will… |
+| Call it when… | You get… |
 | --- | --- |
-| Usage is burning too fast | Analyze your CSV, calibrate, find the waste and the most expensive bot, give the top 3 fixes |
-| You want to reorganize | Model the current team and 1–2 options, compare total cost, hotspots and layers |
-| You have a "what if" | Answer with the matching formula: board, leader, span, hand-over |
+| Usage is burning too fast | A three-sentence bottom line, the top actions with $/week, and a [one-page memo](docs/sample-memo.en.md) |
+| You want to reorganize | A before/after comparison of 1–2 options, the trade-offs, and a reconciliation against measured spend |
+| You have a "what if" | The answer first, then the number from the matching tool: board, leader, span, hand-over |
 
 Setup for Grok Bot: [`adapters/grok-bot/`](adapters/grok-bot/README.md).
 
@@ -315,20 +318,21 @@ No. Everything runs locally with no network calls, including the web calculator,
 
 ## Limits
 
-The model gives direction and magnitude, not an exact bill. It assumes every call re-reads the full context and treats growth between hand-overs as linear. It does not price the quality loss of long contexts or hand-overs, or cache-write premiums on vendors that charge them. Calibration so far is on synthetic data. The Grok Bot usage-events export is read as is, but it has no bot or chat column, so all calls form one context unless you add one. Details in the [guide](docs/guide.en.md#limits-and-references).
+The model gives direction and magnitude, not an exact bill. It assumes every call re-reads the full context and treats growth between hand-overs as linear. It does not price the quality loss of long contexts or hand-overs, or cache-write premiums on vendors that charge them. Calibration so far is on synthetic data. The Grok Bot usage-events export is read as is, but it has no chat id and its Automation ID is often empty, so calls are grouped by model (several bots per bucket) and the report lowers its confidence accordingly. Details in the [guide](docs/guide.en.md#limits-and-references).
 
 ## Repository layout
 
 ```
-core/                     the bto package: cost model, CSV analyzer, org.txt parser, CLI
+core/                     the bto package: cost model, CSV analyzer, advice and memo, org.txt parser, CLI
 core/pricing/             pricing presets (8 models)
 core/platforms/           platform presets (grok-bot, generic)
-adapters/grok-bot/        advisor bot setup and instructions (EN / 中文)
+adapters/grok-bot/        advisor bot setup and consultant playbook (EN / 中文)
 docs/guide.en.md          the full guide: model, formulas, decision flow, anti-patterns
-docs/advisor-demo.en.md   a sample consultation with real outputs
+docs/advisor-demo.en.md   a sample engagement with real outputs
+docs/sample-memo.en.md    the one-page memo `bto report` writes
 docs/calculator/          the web calculator (GitHub Pages), checked against the Python model
 docs/images/              figures, generated from the model by make_figures.py
-samples/                  example teams, a demo team and a synthetic usage CSV
+samples/                  example teams, a demo team, a synthetic usage CSV and a Grok export generator
 tests/                    unit tests and the calculator parity check
 ```
 

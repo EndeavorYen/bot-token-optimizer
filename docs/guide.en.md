@@ -203,12 +203,13 @@ If a bot's value lies mainly in long, unwritten memory (for example a customer h
 
 A usage CSV gives the model real parameters. Only when the model reproduces your actual cost within ±15% should you use it to predict the effect of a redesign.
 
-1. Export a usage CSV from your bot platform, ideally covering at least 3 days and all bots.
-2. Run `bto analyze usage.csv --platform grok-bot --org-out org.json`: it maps columns automatically and computes, per context, wake-ups, calls per wake-up, current C, daily growth and cache hit rate.
-3. Check the "model calibration" error in the report. Above ±15%, use only the measured findings; the usual causes are an unsuitable wake-up gap or non-linear growth.
-4. Add who talks to whom (edit org.json, or describe the team in org.txt / with `bto init`) and run `bto org` for a diagnosis.
-5. Write redesign options and compare total cost with `bto compare`.
-6. Export another CSV a week after the changes to confirm the effect.
+1. Export a usage CSV from your bot platform, ideally covering at least 7 days and all bots.
+2. Run `bto report usage.csv --platform grok-bot --tz +08:00 [--goal-usd-week N]` for the one-page memo: bottom line, where the money goes, ranked actions, data gaps, KPIs with a check date ([example](sample-memo.en.md)).
+3. For the per-context detail, run `bto analyze usage.csv --platform grok-bot --org-out org.json`: it maps columns automatically and computes, per context, wake-ups, calls per wake-up, current C, daily growth and cache hit rate. `bto trend` shows spend per day and a same-window comparison with the day before.
+4. Check the "model calibration" error. Above ±15%, rely on the measured findings; the usual causes are mixed chats, an unsuitable wake-up gap or non-linear growth.
+5. Add who talks to whom (edit org.json, or describe the team in org.txt / with `bto init`) and run `bto org` for a diagnosis.
+6. Write redesign options and compare total cost with `bto compare`.
+7. Export the same window again after the changes and re-run the report to confirm the effect.
 
 Detection rules (all heuristics; check them against the actual conversations):
 
@@ -229,6 +230,17 @@ Three details make the measurements trustworthy:
 - **Hand-overs you already made are detected.** A wake-up whose context is below 60% of the previous one (and at least 5K smaller) starts a new segment. Growth is measured within segments, so a sawtooth does not look like a slow, flat line.
 - **Output is priced too.** Calibration compares the model's input + output cost with the actual spend (the CSV's cost column when present).
 
+### From numbers to advice
+
+`bto report` turns the analysis into recommendations a client can act on:
+
+- **Cost anatomy.** Spend is split into uncached input, cached input, output and the long-context premium. On most teams over 90% is re-reading context, which points at fewer wake-ups and smaller contexts rather than shorter answers.
+- **Evidence tiers.** *Measured*: dollars already spent on a removable pattern in the export (acknowledgement wake-ups, board-first calls, cache misses inside a wake-up, the long-context premium); the range is removing half to all of it. *Modeled*: the hand-over policy, priced with the reset model (`bto reset`); a context handed over at threshold $T$ averages about $(C_{\text{fresh}} + T)/2$. Trusted when calibration is within ±15%. *Judgment*: the sensitivity of the biggest bucket to 10–30% fewer wake-ups, kept out of the total.
+- **Ranking.** Actions are ordered by dollars × confidence ÷ effort; anything under 1% of weekly spend is dropped. The combined saving counts each dollar once (a hand-over absorbs the long-context premium of the same context).
+- **What changed.** Same-window comparison (today so far vs the same hours yesterday, in your time zone) and first-half vs second-half per context: dollars, wake-ups and average context, so you can tell "woken more often" from "reading more each time".
+- **Automatic summarization.** A context that keeps resetting between two similar levels (the peaks vary by less than 25%) is flagged as a sawtooth. On Grok Bot this usually means the platform summarizes at a high threshold; a manual hand-over at a lower one saves most of the difference.
+- **Data gaps.** Missing bot or chat ids, an empty Automation ID (calls are then grouped by model, e.g. `grok-bot-default`), no cache column, a short export, a calibration error, plan billing. Each comes with its fix and lowers the stated confidence instead of blocking the advice.
+
 ### Describing your team
 
 The CSV cannot show who woke whom, so the links come from you. The shortest way is `org.txt`, one line per bot, link or group:
@@ -246,15 +258,15 @@ Bot options: `base` (setup kept after a reset), `wakes` (wake-ups not caused by 
 
 ## Advisor bot
 
-The advisor bot is called only when needed. Every number comes from the tested scripts; the bot gathers information, interprets the results and recommends changes. The Grok Bot instructions are in `adapters/grok-bot/ADVISOR_BOT.en.md` (Chinese: `ADVISOR_BOT.zh-TW.md`).
+The advisor bot is called only when needed and works like a cost consultant, not a calculator: it frames the goal, diagnoses, recommends, plans and sets up the check. Every number comes from the tested tools; the bot frames, interprets, prioritizes and writes. Its playbook for Grok Bot is in `adapters/grok-bot/ADVISOR_BOT.en.md` (Chinese: `ADVISOR_BOT.zh-TW.md`); the [advisor demo](advisor-demo.en.md) shows a full engagement.
 
-| When to call it | What it does | What you provide |
+| When to call it | What you get | What you provide |
 | --- | --- | --- |
-| Usage burning too fast | Analyzes the CSV, calibrates the model, finds anti-patterns and the most expensive bot, gives the top 3 fixes | A usage CSV and one round of questions about who talks to whom |
-| Planning a reorg | Models the current team and 1–2 options, compares total cost, hotspots and layers with `compare` | Your bots and how they communicate |
-| "What if" questions | Answers with the matching command (board, leader, span, reset) | A few parameters, e.g. C and wake-ups per day |
+| Usage burning too fast | A three-sentence bottom line, the top actions with $/week, confidence and effort, and the one-page memo | A usage export, your time zone, a weekly budget if you have one |
+| Planning a reorg | Before/after comparison of 1–2 options, with the trade-offs and a reconciliation against measured spend | Your bots and how they communicate |
+| "What if" questions | The answer first, then the number from the matching tool and the assumption that matters | A few parameters, e.g. C and wake-ups per day |
 
-It follows its own rules: no mental math, no acknowledgement messages, all questions in one round, heuristics clearly labeled, and a suggestion to start a fresh chat next time.
+How it works: answer first in dollars per week; plain words; no internal plumbing (tests, paths, commands) in the answer; recommendations instead of menus, with at most one question; every figure labeled measured, modeled or judgment; the biggest driver raised even if you asked about something else; KPIs with a check date; and the fresh-chat reminder once, at the end.
 
 ## Limits and references
 
@@ -266,7 +278,7 @@ The model gives direction and magnitude, not an exact bill. Keep these limits in
 - Vendors that charge more for cache writes than for plain input (OpenAI, Anthropic) are modeled at the cache-read price only, which slightly understates cost.
 - Quality is not in the cost formula: attention degrades in long contexts and knowledge is lost in hand-overs; judge those separately.
 - Latency is not modeled: every extra layer adds a round of waiting.
-- The Grok Bot usage-events export is read as is (three prompt columns summed, cloud-agent rows left out, text cost priced from tokens), but it has no bot or chat column, so all calls form one context unless you add a bot column. Check the column mapping and calibration error the first time you use a real export.
+- The Grok Bot usage-events export is read as is (three prompt columns summed, cloud-agent rows left out, text cost priced from tokens), but it has no chat id and Automation ID is often empty. Calls without an Automation ID are grouped by model (e.g. `grok-bot-default`), so each bucket can hold several bots and several chats; the dollar split is right, while growth and calibration are blended. Context percentiles stay valid. Check the column mapping and calibration error the first time you use a real export.
 - Prices change; estimated savings overlap and cannot simply be added up.
 
 Recent multi-agent research:

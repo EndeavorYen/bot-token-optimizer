@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """bto — bot token optimizer command line.
 
+    bto report usage.csv --platform grok-bot --goal-usd-week 300 --out memo.md   # one-page memo
     bto analyze usage.csv --platform grok-bot --org-out org.json
+    bto trend usage.csv --tz +08:00
     bto init                      # describe your bots by answering questions
     bto org org.txt               # diagnose (org.txt or org.json)
     bto compare before.txt after.txt
@@ -16,14 +18,15 @@ import math
 import sys
 
 try:
-    from . import __version__, analyze_usage, orgopt, orgspec
+    from . import __version__, advise, analyze_usage, orgopt, orgspec
     from .i18n import resolve_lang
 except ImportError:          # run as a plain script
+    import advise
     import analyze_usage
     import orgopt
     import orgspec
     from i18n import resolve_lang
-    __version__ = "0.2.0"
+    __version__ = "0.3.0"
 
 
 def _dump(obj):
@@ -60,6 +63,23 @@ def build_parser():
     s.add_argument("--soft-cap", type=float, help="context quality soft cap (tokens)")
     s.add_argument("--org-out", help="write an org.json skeleton here")
     s.add_argument("--json", action="store_true")
+
+    def csv_args(s):
+        s.add_argument("csv")
+        s.add_argument("--map", action="append", default=[], help="field=CSV column, e.g. --map bot=Agent")
+        s.add_argument("--cached-separate", action="store_true", help="cached tokens are NOT included in the input column")
+        s.add_argument("--gap", type=float, default=120, help="seconds between calls that still count as one wake-up")
+        s.add_argument("--tz", default="UTC", help="time zone for days, e.g. +08:00 (default UTC)")
+        s.add_argument("--json", action="store_true")
+
+    s = sub.add_parser("report", parents=[common], help="one-page consultant memo from a usage CSV")
+    csv_args(s)
+    s.add_argument("--goal-usd-week", type=float, help="weekly budget to test the plan against")
+    s.add_argument("--handover-at", type=float, default=60000, help="hand-over threshold to evaluate (tokens)")
+    s.add_argument("--out", help="also write the memo to this file")
+
+    s = sub.add_parser("trend", parents=[common], help="spend per day and what changed")
+    csv_args(s)
 
     s = sub.add_parser("init", parents=[common], help="describe your bots interactively")
     s.add_argument("-o", "--out", default="org", help="output base name (writes <out>.txt and <out>.json)")
@@ -177,6 +197,19 @@ def _run(a, lang, pricing, cap):
         else:
             print("\n".join(analyze_usage.notes(res["column_mapping"], res["skipped_rows"], lang, res.get("load_info"))) + "\n")
             print(analyze_usage.report_md(res, lang))
+    elif a.cmd in ("report", "trend"):
+        overrides = dict(m.split("=", 1) for m in a.map)
+        tz = advise.parse_tz(a.tz)
+        rep = advise.report(a.csv, pricing, overrides, a.cached_separate, a.gap,
+                            getattr(a, "goal_usd_week", None), tz, getattr(a, "handover_at", 60000), lang)
+        if a.cmd == "trend":
+            _dump(rep["trend"]) if a.json else print(advise.trend_md(rep["trend"], lang))
+        else:
+            text = advise.memo_md(rep, lang)
+            if a.out:
+                with open(a.out, "w", encoding="utf-8") as f:
+                    f.write(text)
+            _dump({k: v for k, v in rep.items() if k != "tz"}) if a.json else print(text)
     elif a.cmd == "init":
         orgspec.run_init(a.out, lang)
     elif a.cmd == "convert":

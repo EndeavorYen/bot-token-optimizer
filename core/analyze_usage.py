@@ -27,7 +27,8 @@ except ImportError:          # run as a plain script
 
 ALIASES = {
     "time": ["timestamp", "time", "datetime", "date", "created_at", "created", "request_time", "start_time"],
-    "bot": ["bot", "bot_name", "botname", "agent", "agent_name", "bot_id", "agent_id", "assistant", "name"],
+    "bot": ["bot", "bot_name", "botname", "agent", "agent_name", "bot_id", "agent_id", "assistant", "name",
+            "automation_id"],
     "chat": ["chat_id", "chat", "thread_id", "thread", "conversation_id", "session_id", "conversation"],
     "input": ["input_tokens", "prompt_tokens", "input", "total_input_tokens", "tokens_in"],
     "cached": ["cached_input_tokens", "cached_tokens", "cache_read_tokens", "cached_prompt_tokens",
@@ -35,6 +36,7 @@ ALIASES = {
     "output": ["output_tokens", "completion_tokens", "output", "tokens_out"],
     "reasoning": ["reasoning_tokens", "thinking_tokens", "reasoning"],
     "cost": ["cost_usd", "cost", "price_usd", "amount_usd"],
+    "model": ["model", "model_name", "model_id"],
 }
 REQUIRED = ["time", "input"]
 # Grok Bot usage-events export (Date, Cloud Agent ID, Automation ID, Kind, Model, Max Mode,
@@ -111,9 +113,11 @@ def _num(v):
 
 def load_rows(path, overrides=None, cached_separate=False, lang="en", info=None):
     """Rows sorted by time, the column mapping and the number of skipped rows.
-    `info` (a dict), when given, receives load notes: cloud_agent_rows, cost_text_rows, split_input."""
+    `info` (a dict), when given, receives load notes: cloud_agent_rows, cost_text_rows, split_input,
+    bot_empty_rows (rows whose bot cell is blank; grouped by model when there is a model column),
+    bot_column_empty / chat_column_empty (the mapped column is blank on every row)."""
     info = {} if info is None else info
-    info.update(cloud_agent_rows=0, cost_text_rows=0, split_input=False)
+    info.update(cloud_agent_rows=0, cost_text_rows=0, split_input=False, bot_empty_rows=0)
     with open(path, newline="", encoding="utf-8-sig") as f:
         sample = f.read(8192)
         f.seek(0)
@@ -139,6 +143,11 @@ def load_rows(path, overrides=None, cached_separate=False, lang="en", info=None)
                 continue
             r["bot"] = (raw.get(mapping["bot"]) or "").strip() if "bot" in mapping else ""
             r["chat"] = (raw.get(mapping["chat"]) or "").strip() if "chat" in mapping else ""
+            r["model"] = (raw.get(mapping["model"]) or "").strip() if "model" in mapping else ""
+            if "bot" in mapping and not r["bot"]:
+                info["bot_empty_rows"] += 1
+                r["bot"] = r["model"]        # e.g. Grok Bot: no Automation ID -> group by model
+                r["bot_from_model"] = bool(r["model"])
             for k in ("cached", "output", "reasoning", "cost"):
                 try:
                     r[k] = _num(raw.get(mapping[k], 0)) if k in mapping else 0.0
@@ -157,6 +166,11 @@ def load_rows(path, overrides=None, cached_separate=False, lang="en", info=None)
         for r in rows:
             r["cost"] = 0.0
     rows.sort(key=lambda r: r["time"])
+    if rows and "bot" in mapping and info["bot_empty_rows"] == len(rows):
+        info["bot_column_empty"] = mapping["bot"]
+    if rows and "chat" in mapping and not any(r["chat"] for r in rows):
+        info["chat_column_empty"] = mapping["chat"]
+    info["rows_loaded"] = len(rows)
     return rows, mapping, skipped
 
 
@@ -171,6 +185,41 @@ def _fit(xs, ys):
     den = sum((x - mx) ** 2 for x in xs)
     slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den if den else 0.0
     return slope, my - slope * mx
+
+
+def percentile(xs, q):
+    """Linear-interpolated percentile (q in 0..1) of a non-empty list."""
+    v = sorted(xs)
+    if len(v) == 1:
+        return float(v[0])
+    pos = q * (len(v) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(v) - 1)
+    return v[lo] + (v[hi] - v[lo]) * (pos - lo)
+
+
+def cost_parts(r, pricing):
+    """(uncached input, cached input, output incl. reasoning, long-context premium) in USD for one call."""
+    thr = pricing.get("long_context_threshold")
+    base = pricing["per_million"]
+    long_tier = bool(thr and r["input"] >= thr and pricing.get("long_context_per_million"))
+    table = pricing["long_context_per_million"] if long_tier else base
+    cached = min(r["cached"], r["input"])
+    unc = r["input"] - cached
+    out = r["output"] + r.get("reasoning", 0.0)
+    parts = (unc * table["input"] / 1e6, cached * table["cached_input"] / 1e6, out * table["output"] / 1e6)
+    premium = 0.0
+    if long_tier:
+        premium = sum(parts) - (unc * base["input"] + cached * base["cached_input"] + out * base["output"]) / 1e6
+    return parts + (premium,)
+
+
+def miss_premium(r, pricing):
+    """What the uncached part of one call cost above the cached price."""
+    thr = pricing.get("long_context_threshold")
+    table = pricing.get("long_context_per_million") if thr and r["input"] >= thr else None
+    table = table or pricing["per_million"]
+    return (r["input"] - min(r["cached"], r["input"])) * (table["input"] - table["cached_input"]) / 1e6
 
 
 def sessionize(rows, gap_seconds):
@@ -224,6 +273,9 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
             orgopt.call_cost_usd(r["input"], r["cached"], r["output"] + r["reasoning"], pricing) for r in rs)
         total_usd += usd
         wakes = sessionize(rs, gap_seconds)
+        for w in wakes:
+            for j, r in enumerate(w):
+                r["wake_start"] = j == 0
         ctx = [w[0]["input"] for w in wakes]
         days = [(w[0]["time"] - t0).total_seconds() / 86400 for w in wakes]
         segments = []
@@ -247,6 +299,14 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
         flat = dict(pricing, long_context_threshold=None)
         long_extra = sum(cost1(r) - orgopt.call_cost_usd(r["input"], r["cached"], r["output"], flat) for r in long_calls)
 
+        parts = [cost_parts(r, pricing) for r in rs]
+        unc_usd, cached_usd, out_usd, premium = (sum(p[i] for p in parts) for i in range(4))
+        bounds = split_resets(days, ctx)
+        peaks = [max(ctx[a:b]) for a, b in bounds[:-1]]
+        floors = [ctx[a] for a, _ in bounds[1:]]
+        sawtooth = len(peaks) >= 2 and statistics.mean(peaks) > 0 and \
+            statistics.pstdev(peaks) / statistics.mean(peaks) < 0.25
+
         def days_to(target):
             if c_now >= target:
                 return 0.0
@@ -262,6 +322,14 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
             "short_wakes": len(short), "short_wake_usd": sum(cost1(w[0]) for w in short),
             "read_first_wakes": len(read_first), "read_first_usd": sum(cost1(w[0]) for w in read_first),
             "long_context_calls": len(long_calls), "long_context_extra_usd": long_extra,
+            "uncached_input_usd": unc_usd, "cached_input_usd": cached_usd, "output_usd": out_usd,
+            "long_premium_usd": premium,
+            "miss_premium_usd": sum(miss_premium(r, pricing) for r in rs),
+            "in_wake_miss_premium_usd": sum(miss_premium(r, pricing) for w in wakes for r in w[1:]),
+            "C_p10": percentile(ctx, 0.1), "C_p50": percentile(ctx, 0.5), "C_p90": percentile(ctx, 0.9),
+            "C_peak": statistics.median(peaks) if peaks else max(ctx),
+            "C_floor": statistics.median(floors) if floors else min(ctx),
+            "sawtooth": sawtooth,
         })
     for u in units:
         u["share"] = u["usd"] / total_usd if total_usd else 0.0
@@ -287,7 +355,10 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
         if u["input_tokens"] and u["cache_hit"] < 0.5 and u["calls"] >= 10:
             findings.append(("cache", u["unit"], t("u.cache", lang, p=u["cache_hit"]), None, t("u.cache.a", lang)))
     findings.sort(key=lambda f: -(f[3] or 0))
-    return {"calibration": calibrate(units, total_usd, pricing),
+    anatomy = {k: sum(u[k] for u in units) for k in
+               ("uncached_input_usd", "cached_input_usd", "output_usd", "long_premium_usd",
+                "miss_premium_usd", "in_wake_miss_premium_usd", "short_wake_usd", "read_first_usd")}
+    return {"calibration": calibrate(units, total_usd, pricing), "anatomy": anatomy, "has_cost": has_cost,
             "period_start": t0.isoformat(), "period_end": t1.isoformat(), "span_days": span_days,
             "total_usd": total_usd, "rows": len(rows), "units": units,
             "findings": [dict(zip(("type", "unit", "detail", "usd", "advice"), f)) for f in findings]}
@@ -356,6 +427,9 @@ def notes(mapping, skipped, lang="en", info=None):
         out.append(t("u.cloud_agent", lang, n=info["cloud_agent_rows"], col=CLOUD_AGENT_COL))
     if info.get("cost_text_rows"):
         out.append(t("u.cost_text", lang, n=info["cost_text_rows"], col=info.get("cost_column", "cost")))
+    if info.get("bot_empty_rows"):
+        out.append(t("u.bot_empty", lang, n=info["bot_empty_rows"], total=info.get("rows_loaded", 0),
+                     col=mapping.get("bot", "bot"), by=mapping.get("model", "(all)")))
     if "bot" not in mapping:
         out.append(t("u.no_bot", lang) + t("u.use_chat" if "chat" in mapping else "u.all_one", lang))
     if "cached" not in mapping:
