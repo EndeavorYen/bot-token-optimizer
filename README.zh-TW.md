@@ -255,7 +255,7 @@ group team : chief researcher writer : 10/day 900
 | 想要改組 | 1～2 個方案的改前改後比較、取捨，以及與實測花費的對帳 |
 | 想問「如果…會怎樣」 | 先給答案，再給對應工具算出的數字：board、leader、控制幅度、交接 |
 
-Grok Bot 的設定方式：[`adapters/grok-bot/`](adapters/grok-bot/README.zh-TW.md)。
+Grok Bot 的設定方式：[手把手教學](adapters/grok-bot/SETUP.zh-TW.md)（每一句要對既有 bot 說的話都寫好了），以及 [adapter 說明](adapters/grok-bot/README.zh-TW.md)。
 
 ## 價格與平台設定
 
@@ -326,7 +326,7 @@ Grok Bot 的設定方式：[`adapters/grok-bot/`](adapters/grok-bot/README.zh-TW
 core/                       bto 套件：成本模型、CSV 分析、建議與備忘錄、org.txt 解析、指令列工具
 core/pricing/               價格設定（8 個模型）
 core/platforms/             平台設定（grok-bot、generic）
-adapters/grok-bot/          顧問 bot 的設定方式與顧問工作手冊（中文 / English）
+adapters/grok-bot/          手把手建立教學、adapter 說明與顧問工作手冊（中文 / English）
 docs/guide.zh-TW.md         完整指引：模型、公式、架構決策、反模式
 docs/advisor-demo.zh-TW.md  一次諮詢的完整範例（實際輸出）
 docs/sample-memo.zh-TW.md   `bto report` 產出的一頁式備忘錄

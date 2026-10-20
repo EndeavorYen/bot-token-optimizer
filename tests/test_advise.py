@@ -213,5 +213,40 @@ class TestCli(unittest.TestCase):
         self.assertFalse(math.isnan(json.loads(buf.getvalue())["plan"]["usd_per_week"]))
 
 
+class TestSetupGuide(unittest.TestCase):
+    """The step-by-step guides quote the instructions' anchors and the acceptance-test answer; keep them true."""
+    ADAPTER = os.path.join(ROOT, "adapters", "grok-bot")
+
+    def _read(self, name):
+        with open(os.path.join(self.ADAPTER, name), encoding="utf-8") as f:
+            return f.read()
+
+    def test_instruction_anchors(self):
+        for lang in ("en", "zh-TW"):
+            text = self._read(f"ADVISOR_BOT.{lang}.md")
+            first = text.splitlines()[0]
+            last_h2 = [ln for ln in text.splitlines() if ln.startswith("## ")][-1]
+            for guide in ("SETUP.en.md", "SETUP.zh-TW.md"):
+                g = self._read(guide)
+                self.assertIn(first, g, (lang, guide))
+                self.assertIn(last_h2, g, (lang, guide))
+
+    def test_acceptance_answer(self):
+        csv_path = make_grok_export.generate(os.path.join(tempfile.mkdtemp(), "g.csv"))
+        rep = advise.report(csv_path, PRICING, goal_usd_week=60, tz=advise.parse_tz("+08:00"))
+        pl = rep["plan"]
+        self.assertEqual(round(pl["usd_per_week"]), 80)
+        self.assertEqual(rep["analysis"]["units"][0]["unit"], "grok-bot-default")
+        self.assertEqual(round(rep["analysis"]["units"][0]["share"] * 100), 96)
+        self.assertEqual((round(pl["combined_low"]), round(pl["combined_high"])), (28, 57))
+        self.assertTrue(pl["goal"]["reachable"])
+        self.assertEqual(pl["confidence"], "low")
+        self.assertEqual(pl["actions"][0]["code"], "handover")
+        for guide in ("SETUP.en.md", "SETUP.zh-TW.md"):
+            g = self._read(guide)
+            for needle in ("$80", "96%", "$28–57", "60,000", "bto 0.3.0"):
+                self.assertIn(needle, g, (guide, needle))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -255,7 +255,7 @@ Turn this repo into an on-demand cost consultant inside your bot platform. It fr
 | You want to reorganize | A before/after comparison of 1–2 options, the trade-offs, and a reconciliation against measured spend |
 | You have a "what if" | The answer first, then the number from the matching tool: board, leader, span, hand-over |
 
-Setup for Grok Bot: [`adapters/grok-bot/`](adapters/grok-bot/README.md).
+Setup for Grok Bot: a [step-by-step guide](adapters/grok-bot/SETUP.en.md) with every message to paste into your existing bot, plus the [adapter notes](adapters/grok-bot/README.md).
 
 ## Pricing and platform presets
 
@@ -326,7 +326,7 @@ The model gives direction and magnitude, not an exact bill. It assumes every cal
 core/                     the bto package: cost model, CSV analyzer, advice and memo, org.txt parser, CLI
 core/pricing/             pricing presets (8 models)
 core/platforms/           platform presets (grok-bot, generic)
-adapters/grok-bot/        advisor bot setup and consultant playbook (EN / 中文)
+adapters/grok-bot/        step-by-step setup, adapter notes and the consultant playbook (EN / 中文)
 docs/guide.en.md          the full guide: model, formulas, decision flow, anti-patterns
 docs/advisor-demo.en.md   a sample engagement with real outputs
 docs/sample-memo.en.md    the one-page memo `bto report` writes

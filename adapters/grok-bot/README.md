@@ -12,11 +12,14 @@ Set up a "Token Advisor" inside Grok Bot and call it when usage spikes or before
 
 ## Create the advisor bot
 
-1. Add a new Bot in Grok Bot, e.g. "Token Advisor".
-2. Set the contents of [`ADVISOR_BOT.en.md`](ADVISOR_BOT.en.md) as its instructions ([`ADVISOR_BOT.zh-TW.md`](ADVISOR_BOT.zh-TW.md) for Chinese).
-3. Put the whole repo where the bot can access it (e.g. ask it to clone this repo).
-4. It checks its calculator silently at the start of each engagement and only speaks up if something is broken.
-5. Call it only when needed, e.g. "usage exploded this week, here is the export, we need to stay under $300 a week" or "I want to remove the leader, is it worth it?". It answers like a consultant: bottom line in dollars per week, ranked actions with confidence, a one-page memo, and KPIs with a check date ([sample engagement](../../docs/advisor-demo.en.md)). Start a fresh chat for each engagement.
+On Grok Bot you usually ask an existing bot to create a new one. **[SETUP.en.md](SETUP.en.md) walks you through it step by step, with every message ready to paste:** what to tell the main bot, how to check the instructions were copied in full, an acceptance test with known answers, and your first real export.
+
+In short:
+
+1. In a fresh chat, ask an existing bot to create "Token Advisor": clone this repo into its workspace, set [`ADVISOR_BOT.en.md`](ADVISOR_BOT.en.md) verbatim as its instructions ([`ADVISOR_BOT.zh-TW.md`](ADVISOR_BOT.zh-TW.md) for Chinese), and keep it out of groups, schedules and automations.
+2. Check that its instructions start with `# Token Cost Advisor (Grok Bot) — playbook` and end with the `## Ground rules` section.
+3. Run the acceptance test on the synthetic export; the expected answer is about $80/week, 96% in `grok-bot-default`, with $28–57/week of savings.
+4. Call it only when needed, with a new chat each time, e.g. "usage exploded this week, here is the export, we need to stay under $300 a week". It answers like a consultant: the bottom line in dollars per week, ranked actions with their confidence, a one-page memo and KPIs with a check date ([sample engagement](../../docs/advisor-demo.en.md)).
 
 ## Your first real CSV
 
