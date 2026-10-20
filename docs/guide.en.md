@@ -257,6 +257,20 @@ group team : chief researcher : 10/day 300 wake=all
 
 Bot options: `base` (setup kept after a reset), `wakes` (wake-ups not caused by other bots), `rounds` (tool-call rounds of own work), `board` (reads a board after each ping), `out` / `reasoning` (tokens written per wake-up), `cache` (hit rate), `growth` (measured growth per day). Numbers accept `k` and `M`. `bto init` asks the questions for you; `bto convert` switches between org.txt and org.json. Every problem is reported at once, with line numbers.
 
+### Redesigning the organization
+
+`bto redesign org.txt` searches for a cheaper organization of the same bots with the cost model, one change at a time, keeping the change that saves most until nothing saves at least 2% of the total:
+
+| Change | When it is tried | What the formula weighs |
+| --- | --- | --- |
+| Drop acknowledgements, content in the message, one-line group status | always (instruction level) | wake-ups and board reads removed |
+| Retire a bot (redundant) | one upstream, one downstream, no tool work or own wake-ups, passes on about what it receives | its context no longer read; the hand-off goes direct |
+| Merge two bots | they hand work to each other, or share a manager | fewer contexts and no hand-off wake-ups, against one larger context (both bases kept) read on every wake-up |
+| Split a bot | it serves three or more sources | two smaller contexts, against a short summary exchanged twice a day |
+| Add summarizing leaders | a manager has more direct reports than the span limit | the span formula $k^{*}$ sets the group size; each leader sends one summary per round |
+
+To compare structures fairly, every option is evaluated over four weeks under the same hand-over policy (`handover_at`, default the soft cap or 120K), with every context starting at most at that threshold; otherwise a structure could look cheaper just because it starts with fresh chats. Bots marked `keep` are never retired or merged away. The formula cannot see whether two jobs belong together: a merge is a candidate until someone checks that the bots need the same tools and access and that neither reviews the other. The output lists the redundant bots, every change with its saving (they add up in order), the current and proposed org charts as Mermaid diagrams, and a change request for the managing bot. `bto report --org-out` writes a skeleton from the measured contexts and named bots to start from.
+
 ## Advisor bot
 
 The advisor bot is called only when needed and works like a cost consultant, not a calculator: it frames the goal, diagnoses, recommends, plans and sets up the check. Every number comes from the tested tools; the bot frames, interprets, prioritizes and writes. Its playbook for Grok Bot is in `adapters/grok-bot/ADVISOR_BOT.en.md` (Chinese: `ADVISOR_BOT.zh-TW.md`); the [advisor demo](advisor-demo.en.md) shows a full engagement.

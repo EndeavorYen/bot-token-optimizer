@@ -25,6 +25,7 @@ jobs:
           bto analyze samples/sample_usage.csv --lang zh-TW > /dev/null
           bto report samples/sample_usage.csv --platform grok-bot --tz +08:00 --lang zh-TW > /dev/null
           python samples/make_grok_export.py /tmp/g.csv && bto report /tmp/g.csv --schedules samples/grok_schedules.txt --tz +08:00 > /dev/null
+          bto redesign samples/org_before.txt --platform grok-bot --keep chief > /dev/null
 
   docs:
     runs-on: ubuntu-latest
@@ -47,6 +48,6 @@ jobs:
       - name: Sample memos match the tools
         run: |
           python docs/make_memos.py
-          git diff --exit-code docs/sample-memo*.md || (echo "Run python docs/make_memos.py" && exit 1)
+          git diff --exit-code docs/sample-memo*.md docs/sample-redesign.*.md || (echo "Run python docs/make_memos.py" && exit 1)
       - name: Web calculator matches the Python model
         run: node tests/calculator_parity.mjs

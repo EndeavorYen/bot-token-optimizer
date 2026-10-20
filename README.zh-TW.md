@@ -225,6 +225,7 @@ bto --help
 | 逐上下文明細與組織骨架 | `bto analyze usage.csv --platform grok-bot --org-out org.json` |
 | 用問答描述你的團隊 | `bto init` |
 | 診斷團隊 | `bto org org.txt --platform grok-bot` |
+| 誰是冗員、該合併或拆開什麼、最佳組織圖 | `bto redesign org.txt --keep chief` |
 | 比較改組方案 | `bto compare org.txt org_redesign.txt` |
 | 讀 board 的來回值不值得？ | `bto board --k 1` |
 | 一個主管該帶幾個？ | `bto span --n 12 --c0 30000 --m 1000` |
@@ -253,7 +254,7 @@ group team : chief researcher writer : 10/day 900
 | 什麼時候叫它 | 你會得到 |
 | --- | --- |
 | 用量消耗太快 | 它先自己查各 bot 的排程與規則，再給你點名最花錢 bot 的三句話結論、附每週金額的具體變更、給主 bot 的變更請求，以及[一頁式備忘錄](docs/sample-memo-grok.zh-TW.md) |
-| 想要改組 | 1～2 個方案的改前改後比較、取捨，以及與實測花費的對帳 |
+| 想要改組 | 誰是冗員、哪些 bot 該合併或拆開、目前與建議的組織圖及每項變更省多少（[範例](docs/sample-redesign.zh-TW.md)），以及變更請求 |
 | 想問「如果…會怎樣」 | 先給答案，再給對應工具算出的數字：board、leader、控制幅度、交接 |
 
 Grok Bot 的設定方式：[手把手教學](adapters/grok-bot/SETUP.zh-TW.md)（每一句要對既有 bot 說的話都寫好了），以及 [adapter 說明](adapters/grok-bot/README.zh-TW.md)。
@@ -324,13 +325,14 @@ Grok Bot 的設定方式：[手把手教學](adapters/grok-bot/SETUP.zh-TW.md)�
 ## Repo 結構
 
 ```
-core/                       bto 套件：成本模型、CSV 分析、排程比對、建議與備忘錄、org.txt 解析、指令列工具
+core/                       bto 套件：成本模型、CSV 分析、排程比對、建議與備忘錄、組織改造、org.txt 解析、指令列工具
 core/pricing/               價格設定（8 個模型）
 core/platforms/             平台設定（grok-bot、generic）
 adapters/grok-bot/          手把手建立教學、adapter 說明與顧問工作手冊（中文 / English）
 docs/guide.zh-TW.md         完整指引：模型、公式、架構決策、反模式
 docs/advisor-demo.zh-TW.md  一次諮詢的完整範例（實際輸出）
 docs/sample-memo*.zh-TW.md  `bto report` 產出的一頁式備忘錄（由 make_memos.py 產生）
+docs/sample-redesign.zh-TW.md  `bto redesign` 對範例團隊的改組建議
 docs/calculator/            網頁計算器（GitHub Pages），與 Python 模型交叉驗證
 docs/images/                圖表，由 make_figures.py 依模型產生
 samples/                    範例團隊、示範團隊、合成的 usage CSV 與 Grok 匯出檔產生器

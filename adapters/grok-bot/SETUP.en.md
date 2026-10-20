@@ -53,7 +53,7 @@ A correct report looks like this:
 | (a) Name | Token Advisor |
 | (b) First line | `# Token Cost Advisor (Grok Bot) — playbook` |
 | (c) Last heading | `## Ground rules` |
-| (d) Version | `bto 0.5.0` (or newer) |
+| (d) Version | `bto 0.6.0` (or newer) |
 | (e) Reads other bots | yes |
 
 **If something does not match, paste this to the main bot:**
@@ -140,13 +140,13 @@ If nothing changes, the instructions were probably rewritten or are an old versi
 
 Talk to the Token Advisor, with a new chat for each engagement.
 
-**Reorganizing:**
+**Reviewing the organization:**
 
 ```text
-I want to change how the bots divide work: ____ (e.g. remove the leader and let workers report to the main bot).
-Today: ____ → ____ about __ times a day, messages about ____ (a line / a paragraph / a document); groups: ____.
-Compare before and after and tell me whether it is worth it.
+Can the organization be leaner? Tell me who is redundant, which bots should be merged or split, and show me the best org chart. These must stay as they are: ____ (optional).
 ```
+
+It reads who notifies whom itself, builds the team model from the measured contexts, and answers with the redundant bots, the merges and splits with their savings, the current and proposed org charts, and a change request.
 
 **A theory question:**
 

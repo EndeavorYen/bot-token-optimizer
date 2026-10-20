@@ -8,6 +8,7 @@
     bto init                      # describe your bots by answering questions
     bto org org.txt               # diagnose (org.txt or org.json)
     bto compare before.txt after.txt
+    bto redesign org.txt --keep chief    # who is redundant, what to merge or split, the new org chart
     bto board | scenario | span | reset | cost | convert | presets
 
 Without installing: python3 core/cli.py <command> ...
@@ -19,16 +20,17 @@ import math
 import sys
 
 try:
-    from . import __version__, advise, analyze_usage, orgopt, orgspec, schedules
+    from . import __version__, advise, analyze_usage, orgopt, orgspec, redesign, schedules
     from .i18n import resolve_lang
 except ImportError:          # run as a plain script
     import advise
     import analyze_usage
     import orgopt
     import orgspec
+    import redesign
     import schedules
     from i18n import resolve_lang
-    __version__ = "0.5.0"
+    __version__ = "0.6.0"
 
 
 def _dump(obj):
@@ -85,6 +87,7 @@ def build_parser():
     s.add_argument("--schedules", help="schedules file (one bot per line: NAME every 30m | at 09:00,18:00 | cron ...) "
                                        "to split buckets into bots")
     s.add_argument("--out", help="also write the memo to this file")
+    s.add_argument("--org-out", help="write an org.json skeleton of the contexts and named bots (for bto redesign)")
 
     s = sub.add_parser("trend", parents=[common], help="spend per day and what changed")
     csv_args(s)
@@ -106,6 +109,14 @@ def build_parser():
 
     s = sub.add_parser("org", parents=[common], help="diagnose an organization (org.txt or org.json)")
     s.add_argument("file")
+    s.add_argument("--json", action="store_true")
+
+    s = sub.add_parser("redesign", parents=[common], help="search for a cheaper organization of the same bots")
+    s.add_argument("file")
+    s.add_argument("--merge-cap", type=float, help="largest merged context (default: soft_cap, else 120000)")
+    s.add_argument("--max-moves", type=int, default=6, help="at most this many structural changes")
+    s.add_argument("--keep", default="", help="comma-separated bots that must not be retired or merged away")
+    s.add_argument("--out", help="write the redesigned org.txt here")
     s.add_argument("--json", action="store_true")
 
     s = sub.add_parser("compare", parents=[common], help="compare two organizations")
@@ -225,6 +236,9 @@ def _run(a, lang, pricing, cap):
             _dump(rep["trend"]) if a.json else print(advise.trend_md(rep["trend"], lang))
         else:
             text = advise.memo_md(rep, lang)
+            if getattr(a, "org_out", None):
+                with open(a.org_out, "w", encoding="utf-8") as f:
+                    json.dump(advise.org_skeleton(rep), f, ensure_ascii=False, indent=2)
             if a.out:
                 with open(a.out, "w", encoding="utf-8") as f:
                     f.write(text)
@@ -256,6 +270,15 @@ def _run(a, lang, pricing, cap):
     elif a.cmd == "org":
         res = orgopt.evaluate_org(_load(a.file, lang), pricing, cap, lang)
         _dump(res) if a.json else print(orgopt.org_report_md(res, lang))
+    elif a.cmd == "redesign":
+        org = _load(a.file, lang)
+        for name in filter(None, (x.strip() for x in a.keep.split(","))):
+            next((b for b in org["bots"] if b["name"] == name), {})["keep"] = True
+        res = redesign.optimize(org, pricing, cap, a.merge_cap, a.max_moves)
+        if a.out:
+            with open(a.out, "w", encoding="utf-8") as f:
+                f.write(orgspec.to_txt(res["structure"]["org"]))
+        _dump(res) if a.json else print(redesign.redesign_md(res, pricing, lang))
     elif a.cmd == "compare":
         res = orgopt.compare_orgs(_load(a.before, lang), _load(a.after, lang), pricing, cap, lang)
         _dump(res) if a.json else print(orgopt.compare_report_md(res, lang))

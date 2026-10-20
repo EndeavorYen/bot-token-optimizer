@@ -225,6 +225,7 @@ No dependencies. Or clone the repo and run `python3 core/cli.py` in place of `bt
 | Per-context detail and an org skeleton | `bto analyze usage.csv --platform grok-bot --org-out org.json` |
 | Describe your team by answering questions | `bto init` |
 | Diagnose the team | `bto org org.txt --platform grok-bot` |
+| Who is redundant, what to merge or split, the best org chart | `bto redesign org.txt --keep chief` |
 | Compare a redesign | `bto compare org.txt org_redesign.txt` |
 | Is a board round-trip worth it? | `bto board --k 1` |
 | How many bots per manager? | `bto span --n 12 --c0 30000 --m 1000` |
@@ -253,7 +254,7 @@ Turn this repo into an on-demand cost consultant inside your bot platform. It fr
 | Call it when… | You get… |
 | --- | --- |
 | Usage is burning too fast | It looks up your bots' schedules and rules itself, then gives a three-sentence bottom line naming the costliest bot, concrete changes with $/week, a change request for the main bot and a [one-page memo](docs/sample-memo-grok.en.md) |
-| You want to reorganize | A before/after comparison of 1–2 options, the trade-offs, and a reconciliation against measured spend |
+| You want to reorganize | Who is redundant, which bots to merge or split, the current and proposed org charts with the savings of each change ([example](docs/sample-redesign.en.md)), and the change request |
 | You have a "what if" | The answer first, then the number from the matching tool: board, leader, span, hand-over |
 
 Setup for Grok Bot: a [step-by-step guide](adapters/grok-bot/SETUP.en.md) with every message to paste into your existing bot, plus the [adapter notes](adapters/grok-bot/README.md).
@@ -324,13 +325,14 @@ The model gives direction and magnitude, not an exact bill. It assumes every cal
 ## Repository layout
 
 ```
-core/                     the bto package: cost model, CSV analyzer, schedule matching, advice and memo, org.txt parser, CLI
+core/                     the bto package: cost model, CSV analyzer, schedule matching, advice and memo, org redesign, org.txt parser, CLI
 core/pricing/             pricing presets (8 models)
 core/platforms/           platform presets (grok-bot, generic)
 adapters/grok-bot/        step-by-step setup, adapter notes and the consultant playbook (EN / 中文)
 docs/guide.en.md          the full guide: model, formulas, decision flow, anti-patterns
 docs/advisor-demo.en.md   a sample engagement with real outputs
 docs/sample-memo*.en.md   one-page memos `bto report` writes (make_memos.py regenerates them)
+docs/sample-redesign.en.md  what `bto redesign` proposes for the sample team
 docs/calculator/          the web calculator (GitHub Pages), checked against the Python model
 docs/images/              figures, generated from the model by make_figures.py
 samples/                  example teams, a demo team, a synthetic usage CSV and a Grok export generator

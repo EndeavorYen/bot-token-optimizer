@@ -271,6 +271,7 @@ def evaluate_org(org, pricing=None, span_cap=None, lang="en"):
     span_cap = int(org.get("span_cap") or span_cap or DEFAULT_SPAN_CAP)
     handover = float(org.get("handover_tokens", DEFAULT_HANDOVER))
     soft_cap = org.get("quality_soft_cap")
+    handover_at = org.get("handover_at")
     bots = {b["name"]: _bot_defaults(b) for b in org["bots"]}
     links = org.get("links", []) or []
     groups = org.get("groups", []) or []
@@ -312,7 +313,26 @@ def evaluate_org(org, pricing=None, span_cap=None, lang="en"):
         cin = cout = 0.0
         n_steps = max(1, int(H * 24))
         dt = H / n_steps
-        for i in range(n_steps):
+        b["resets"] = 0
+        if handover_at:
+            # policy: hand over whenever the context passes handover_at; each hand-over reads the old
+            # context once, writes the note and starts the new chat with one uncached read
+            ct0 = b["C"]
+            for i in range(n_steps):
+                ct = ct0 + b["growth"] * 0.5 * dt
+                long = ct >= thr
+                cin += b["rounds_per_day"] * dt * ct * p * (long_in if long else 1.0)
+                cout += b["wakes"] * dt * b["out"] * r_out * (long_out if long else 1.0)
+                ct0 += b["growth"] * dt
+                if ct0 >= handover_at:
+                    c_new = b["base"] + handover
+                    cin += p * ct0 + c_new
+                    cout += handover * r_out
+                    ct0 = c_new
+                    b["resets"] += 1
+            b["C_end"] = ct0
+        else:
+          for i in range(n_steps):
             ct = b["C"] + b["growth"] * (i + 0.5) * dt
             long = ct >= thr
             cin += b["rounds_per_day"] * dt * ct * p * (long_in if long else 1.0)
@@ -386,7 +406,7 @@ def evaluate_org(org, pricing=None, span_cap=None, lang="en"):
     rows = [{"bot": b["name"], "C_now": b["C"], "C_end": b["C_end"], "wakes_per_day": b["wakes"],
              "rounds_per_day": b["rounds_per_day"], "input_eq": b["input_eq"], "output_eq": b["output_eq"],
              "cost_eq": b["cost_eq"], "cost_usd": to_usd(b["cost_eq"], pricing), "share": b["share"],
-             "reset_interval_days": b["reset"]["reset_interval_days"]}
+             "reset_interval_days": b["reset"]["reset_interval_days"], "resets": b["resets"]}
             for b in sorted(bots.values(), key=lambda x: -x["cost_eq"])]
     return {"horizon_days": H, "total_eq": total, "total_usd": to_usd(total, pricing),
             "output_usd": to_usd(total_out, pricing), "longest_chain": chain, "bots": rows, "findings": findings}

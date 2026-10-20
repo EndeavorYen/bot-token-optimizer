@@ -7,7 +7,7 @@ type: software
 license: MIT
 repository-code: "https://github.com/EndeavorYen/bot-token-optimizer"
 url: "https://endeavoryen.github.io/bot-token-optimizer/calculator/"
-version: 0.5.0
+version: 0.6.0
 date-released: 2026-10-20
 keywords:
   - llm

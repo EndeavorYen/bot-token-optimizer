@@ -20,4 +20,7 @@ for lang in ("en", "zh-TW"):
                           "--schedules", os.path.join(ROOT, "samples", "grok_schedules.txt"), "--lang", lang,
                           "--out", os.path.join(ROOT, "docs", f"sample-memo-grok.{lang}.md")],
                    check=True, stdout=subprocess.DEVNULL)
-print("docs/sample-memo*.md regenerated")
+    subprocess.run(CLI + ["redesign", os.path.join(ROOT, "samples", "org_before.txt"), "--platform", "grok-bot",
+                          "--keep", "chief,reviewer", "--lang", lang], check=True,
+                   stdout=open(os.path.join(ROOT, "docs", f"sample-redesign.{lang}.md"), "w", encoding="utf-8"))
+print("docs/sample-memo*.md and docs/sample-redesign.*.md regenerated")

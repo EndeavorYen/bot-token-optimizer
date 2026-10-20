@@ -23,12 +23,12 @@ class OrgSpecError(ValueError):
     pass
 
 
-TOP_KEYS = {"horizon_days", "quality_soft_cap", "handover_tokens", "span_cap", "bots", "links", "groups",
+TOP_KEYS = {"horizon_days", "quality_soft_cap", "handover_tokens", "handover_at", "span_cap", "bots", "links", "groups",
             "_note", "$schema"}
 BOT_KEYS = {"name", "context_tokens", "base_tokens", "own_wakes_per_day", "work_rounds_per_wake",
             "reads_board_via_tool", "board_read_tokens", "output_tokens_per_wake", "reasoning_tokens_per_wake",
-            "cache_hit_ratio", "growth_per_day"}
-BOT_NUM = BOT_KEYS - {"name", "reads_board_via_tool", "cache_hit_ratio"}
+            "cache_hit_ratio", "growth_per_day", "keep"}
+BOT_NUM = BOT_KEYS - {"name", "reads_board_via_tool", "cache_hit_ratio", "keep"}
 LINK_KEYS = {"from", "to", "messages_per_day", "avg_tokens"}
 GROUP_KEYS = {"name", "members", "messages_per_day", "avg_tokens", "wake"}
 
@@ -46,7 +46,7 @@ def validate_org(org, lang="en"):
     for k in org:
         if k not in TOP_KEYS:
             warns.append(t("v.unknown_key", lang, where="org", field=k))
-    for k in ("horizon_days", "quality_soft_cap", "handover_tokens", "span_cap"):
+    for k in ("horizon_days", "quality_soft_cap", "handover_tokens", "handover_at", "span_cap"):
         if k in org and org[k] is not None and not _is_num(org[k]):
             errs.append(t("v.num", lang, where="org", field=k, val=org[k]))
     bots = org.get("bots")
@@ -132,7 +132,7 @@ _BOT_OPTS = {"base": "base_tokens", "wakes": "own_wakes_per_day", "rounds": "wor
              "out": "output_tokens_per_wake", "reasoning": "reasoning_tokens_per_wake",
              "cache": "cache_hit_ratio", "growth": "growth_per_day", "board": "board_read_tokens"}
 _SETTINGS = {"horizon": "horizon_days", "soft_cap": "quality_soft_cap", "handover": "handover_tokens",
-             "span_cap": "span_cap"}
+             "handover_at": "handover_at", "span_cap": "span_cap"}
 
 
 def parse_number(tok, n=0, lang="en"):
@@ -171,7 +171,9 @@ def parse_txt(text, lang="en"):
             b = {"name": parts[1], "context_tokens": parse_number(parts[2], n, lang)}
             for opt in parts[3:]:
                 k, eq, v = opt.partition("=")
-                if k == "board":
+                if k == "keep" and not eq:
+                    b["keep"] = True
+                elif k == "board":
                     b["reads_board_via_tool"] = True
                     if eq:
                         b["board_read_tokens"] = parse_number(v, n, lang)
@@ -210,6 +212,8 @@ def to_txt(org):
                 opts.append(f"{short}={_k(b[key]) if key != 'cache_hit_ratio' else b[key]}")
         if b.get("reads_board_via_tool"):
             opts.append(f"board={_k(b['board_read_tokens'])}" if "board_read_tokens" in b else "board")
+        if b.get("keep"):
+            opts.append("keep")
         out.append(f"bot {b['name']:<{width}} {_k(b['context_tokens'])} " + " ".join(opts))
     for ln in org.get("links", []):
         out.append(f"{ln['from']} -> {ln['to']} : {ln['messages_per_day']:g}/day {_k(ln['avg_tokens'])}")

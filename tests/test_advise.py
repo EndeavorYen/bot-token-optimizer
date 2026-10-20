@@ -398,7 +398,7 @@ class TestSetupGuide(unittest.TestCase):
         self.assertEqual((round(q["days_after_low"], 1), round(q["days_after_high"], 1)), (5.5, 12.4))
         for guide in ("SETUP.en.md", "SETUP.zh-TW.md"):
             g = self._read(guide)
-            for needle in ("$158", "$68", "64%", "$41–59", "$72–120", "5.5", "bto 0.5.0", "grok_schedules.txt"):
+            for needle in ("$158", "$68", "64%", "$41–59", "$72–120", "5.5", "bto 0.6.0", "grok_schedules.txt"):
                 self.assertIn(needle, g, (guide, needle))
         for playbook in ("ADVISOR_BOT.en.md", "ADVISOR_BOT.zh-TW.md"):
             g = self._read(playbook)

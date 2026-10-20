@@ -87,6 +87,15 @@ Take the report's ranked actions, keep the **top three to five**, and make each 
 
 End the recommendations with the **change request**: one message, ready to paste to the main bot, built from the report's "Paste to the main bot" block and customized with the real names and rule text. Ask: "Shall I send this to the main bot?" Send it only after an explicit yes. You never change any bot yourself.
 
+### Organization review (when the client asks about structure, or unscheduled traffic is large)
+"Who is redundant, what should be merged or split, what should the org chart look like" is answered with the formula, not with opinions:
+1. `report … --org-out org.json` writes the contexts and named bots you measured. Add what fieldwork found: who notifies whom (`links`), groups, board reads. Move the wake-ups those messages cause out of `own_wakes_per_day`.
+2. Set `handover_at` to the threshold you are recommending, so every structure is compared under the same hand-over policy.
+3. Mark `keep` on bots that must stay or must stay independent: reviewers and approvers, client-facing bots, bots with tools or access others lack, anything the client named.
+4. Run `bto redesign org.json`. It tries instruction changes, then retiring pure relays, merging bots that hand work to each other or share a manager, splitting overloaded bots, and adding summarizing leaders above the span limit. It keeps a change only if the formula says it saves at least 2%.
+5. **Vet every merge before presenting it.** Two jobs belong in one bot only if they need the same tools and access and neither checks the other. Rerun with `--keep` for any merge you reject.
+6. Present the redundant bots and why, the merges and splits with their savings, the current and proposed org charts (the report draws both), and the change request.
+
 ### 5. Plan and verify
 - **Sequence:** today (schedule and instruction changes), this week (hand-overs), decisions only the client can make (for example "monitor every 2h means problems are noticed up to 2h later: acceptable?").
 - **KPIs** with a current value, a target and a check date (the report proposes them). Ask for an export of the same length after that date and compare like for like.
@@ -96,7 +105,7 @@ End the recommendations with the **change request**: one message, ready to paste
 | When | What you hand over |
 |---|---|
 | "Look at my usage" | The bottom line (≤ 3 sentences, naming the biggest bot), the top actions table, the change request for the main bot, and the one-page memo (`--out memo.md`). Edit wording and add context; never change the numbers. |
-| Reorganization | A before/after table from `compare` and the recommended option with its trade-offs, plus the change request. |
+| Reorganization | From `bto redesign`: who is redundant and why, merges and splits with their savings, the current and proposed org charts, the trade-offs you vetted, and the change request. |
 | Theory question | Answer first, then the number from the tool, then the one assumption that matters most. |
 
 ## Example
@@ -139,7 +148,7 @@ researcher -> chief : 6/day 15
 group team : chief researcher : 10/day 300 wake=all
 ```
 
-Bot options: `base`, `wakes`, `rounds`, `board`, `out`, `reasoning`, `cache`, `growth`; numbers accept `k` and `M`. Errors are listed all at once with line numbers.
+Bot options: `base`, `wakes`, `rounds`, `board`, `out`, `reasoning`, `cache`, `growth`, `keep`; settings also take `handover_at`. Numbers accept `k` and `M`. Errors are listed all at once with line numbers.
 
 ## Tool reference (for you, not for the client)
 
@@ -150,7 +159,9 @@ Bot options: `base`, `wakes`, `rounds`, `board`, `out`, `reasoning`, `cache`, `g
 | Spend per day, what changed | `trend <csv> --tz <tz>` |
 | Per-chat detail, org skeleton | `analyze <csv> --platform grok-bot --org-out org_measured.json` |
 | Cost of a described team, anti-patterns | `org <org.txt>` |
-| Before vs after a redesign | `compare <before.txt> <after.txt>` |
+| Who is redundant, what to merge or split, the new org chart | `redesign <org.txt or org.json> [--keep a,b] [--out after.txt]` |
+| Org skeleton of the measured contexts and named bots | `report … --org-out org.json` |
+| Before vs after a redesign you wrote yourself | `compare <before.txt> <after.txt>` |
 | Is "write to a board, then ping" worth it? | `board --k <rounds> --mode sequential\|parallel` |
 | Relay leader vs summarizing leader | `scenario relay` / `scenario aggregate --n <workers>` |
 | How many bots per manager? | `span --n <workers> --c0 <manager context> --m <tokens per report>` |

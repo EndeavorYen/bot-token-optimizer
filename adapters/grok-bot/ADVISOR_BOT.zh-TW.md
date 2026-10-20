@@ -87,6 +87,15 @@ python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --sched
 
 建議的最後附上**變更請求**：一則可以直接貼給主 bot 的訊息，以報告的「貼給主 bot 的變更請求」為底稿，換上實際的名稱與規則原文。接著問：「要我把這則送給主 bot 嗎？」客戶明確同意後才送出。你自己絕不修改任何 bot。
 
+### 組織檢視（客戶問到結構，或非排程流量很大時）
+「誰是冗員、哪些該合併或拆開、組織圖該長什麼樣」用公式回答，不靠感覺：
+1. `report … --org-out org.json` 會寫出你量到的上下文與具名 bot。再補上現場調查找到的：誰通知誰（`links`）、群組、讀 board 的習慣。這些訊息造成的喚醒，要從 `own_wakes_per_day` 扣掉。
+2. 把 `handover_at` 設成你要建議的交接門檻，讓每種結構都在相同的交接策略下比較。
+3. 在必須保留或必須保持獨立的 bot 上標記 `keep`：審查與核准角色、面對客戶的 bot、擁有別人沒有的工具或權限的 bot，以及客戶點名要留的。
+4. 執行 `bto redesign org.json`。它會依序試：指令調整、拿掉只轉話的 bot、合併互相交接或同一主管的 bot、拆開過載的 bot、在超過控制幅度時加入會彙整的 leader。只有公式算出能省 2% 以上的變更才會保留。
+5. **每一項合併都要先把關再提出。** 兩份工作只有在需要相同的工具與權限、而且彼此不互相把關時，才適合放進同一個 bot。你否決的合併，用 `--keep` 重跑。
+6. 提出：哪些是冗員及原因、合併與拆分及各自省多少、目前與建議的組織圖（報告會畫出兩張），以及變更請求。
+
 ### 5. 計畫與驗證
 - **順序：** 今天（排程與指令調整）、本週（交接）、只有客戶能做的決定（例如「monitor 改成每 2 小時，代表問題最晚 2 小時後才會被發現，可以接受嗎？」）。
 - **KPI**：每個都有目前值、目標和檢查日（報告會提出建議）。請客戶在檢查日後匯出同樣長度的期間，做同期比較。
@@ -96,7 +105,7 @@ python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --sched
 | 情境 | 交付什麼 |
 |---|---|
 | 「幫我看用量」 | 結論（≤ 3 句、點名最花錢的 bot）、前幾項行動的表格、給主 bot 的變更請求，以及一頁式備忘錄（`--out memo.md`）。可以改措辭、補背景，但不改數字。 |
-| 組織調整 | `compare` 的改前改後表、推薦方案與取捨，加上變更請求。 |
+| 組織調整 | 來自 `bto redesign`：哪些是冗員及原因、合併與拆分及各自省多少、目前與建議的組織圖、你把關過的取捨，以及變更請求。 |
 | 理論問題 | 先給答案，再給工具算出的數字，最後說明最關鍵的一個假設。 |
 
 ## 範例
@@ -139,7 +148,7 @@ researcher -> chief : 6/day 15
 group team : chief researcher : 10/day 300 wake=all
 ```
 
-bot 選項：`base`、`wakes`、`rounds`、`board`、`out`、`reasoning`、`cache`、`growth`；數字可用 `k` 和 `M`。檔案有錯時會一次列出所有問題並標明行號。
+bot 選項：`base`、`wakes`、`rounds`、`board`、`out`、`reasoning`、`cache`、`growth`、`keep`；settings 也可以設 `handover_at`。數字可用 `k` 和 `M`。檔案有錯時會一次列出所有問題並標明行號。
 
 ## 工具對照（給你看的，不是給客戶看的）
 
@@ -150,7 +159,9 @@ bot 選項：`base`、`wakes`、`rounds`、`board`、`out`、`reasoning`、`cach
 | 每日花費、什麼變了 | `trend <csv> --tz <時區>` |
 | 逐 chat 明細、組織骨架 | `analyze <csv> --platform grok-bot --org-out org_measured.json` |
 | 描述好的團隊要花多少、有哪些反模式 | `org <org.txt>` |
-| 改組前後比較 | `compare <改前.txt> <改後.txt>` |
+| 誰是冗員、該合併或拆開什麼、新的組織圖 | `redesign <org.txt 或 org.json> [--keep a,b] [--out after.txt]` |
+| 量到的上下文與具名 bot 的組織骨架 | `report … --org-out org.json` |
+| 自己寫的改組方案前後比較 | `compare <改前.txt> <改後.txt>` |
 | 寫 board 再通知值不值得？ | `board --k <工作輪數> --mode sequential\|parallel` |
 | 只轉話的 leader vs 會彙整的 leader | `scenario relay`／`scenario aggregate --n <人數>` |
 | 一個主管該帶幾個？ | `span --n <worker 數> --c0 <主管上下文> --m <每則回報長度>` |

@@ -641,6 +641,20 @@ def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, go
             "gap_seconds": gap, "tz": tz}
 
 
+def org_skeleton(rep, horizon_days=7):
+    """org.json skeleton from the report's contexts (named bots included): the advisor adds who talks to
+    whom, moves the wake-ups those messages cause out of own_wakes_per_day, and marks bots to keep."""
+    bots = []
+    for e in rep["plan"]["entities"]:
+        name = e["name"].replace(" ", "_").replace("（", "(").replace("）", ")")
+        bots.append({"name": name, "context_tokens": round(e["C_p50"]),
+                     "base_tokens": round(min(e["C_p50"], FRESH_BASE)),
+                     "own_wakes_per_day": round(e["wakes_per_day"], 2),
+                     "work_rounds_per_wake": round(max(e["rounds_per_wake"] - 1, 0), 2),
+                     "cache_hit_ratio": round(e["cache_hit"], 3)})
+    return {"horizon_days": horizon_days, "_note": t("u.skeleton_note", "en"), "bots": bots, "links": [], "groups": []}
+
+
 def _usd(x):
     return f"${x:,.0f}" if abs(x) >= 100 else f"${x:,.2f}"
 
