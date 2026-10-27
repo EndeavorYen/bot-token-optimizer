@@ -387,6 +387,8 @@ M = {
     "m.ap_period_active": ("Period: {start} – {end} ({days:.1f} calendar days, {rows:,} calls). Weekly figures = spend × 7 / {active:.1f} active days, excluding {gap:.1f} days with no rows.",
                            "期間：{start} – {end}（日曆 {days:.1f} 天、{rows:,} 次呼叫）。每週數字 = 花費 × 7 ÷ {active:.1f} 個有資料的天，已排除沒有資料的 {gap:.1f} 天。"),
     "m.quota_gap": ("Quota gap", "額度缺口"),
+    "m.rest_unjudged": ("Rest days were not judged: the export has fewer than two full weeks, so only silences that start or end inside busy hours count as quota gaps.",
+                        "未判斷休息日：資料不到兩個完整週，只有在忙碌時段內開始或結束的靜默才算額度缺口。"),
     "m.usage_gap": ("No rows from {start} to {end} ({days:.1f} days).",
                     "無資料列：{start} 至 {end}（{days:.1f} 天）。"),
     "m.denominator": ("Weekly rate, quota days and savings use {active:.1f} active days as the denominator (calendar span {span:.1f} days, excluding {gap:.1f} days with no rows).",

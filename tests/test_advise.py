@@ -749,8 +749,15 @@ def _two_date_hole_csv(path):
     return _write_calls(path, stamps)
 
 
+REST_UNJUDGED_EN = (
+    "Rest days were not judged: the export has fewer than two full weeks, "
+    "so only silences that start or end inside busy hours count as quota gaps."
+)
+REST_UNJUDGED_ZH = "未判斷休息日：資料不到兩個完整週，只有在忙碌時段內開始或結束的靜默才算額度缺口。"
+
+
 class TestLocalClockGaps(unittest.TestCase):
-    """Quota gaps use --tz, or the quiet-point frame when it is omitted. t1–t10."""
+    """Quota gaps use --tz, or the quiet-point frame when it is omitted. t1–t14."""
 
     @classmethod
     def setUpClass(cls):
@@ -773,6 +780,11 @@ class TestLocalClockGaps(unittest.TestCase):
             outage = (datetime(2026, 10, 13, 13, 0, tzinfo=tz), datetime(2026, 10, 15, 12, 0, tzinfo=tz))
             cls.t9[hours] = _zoned_office_csv(os.path.join(cls.tmp, f"t9_{hours}.csv"), hours, mon_fri, outage)
         cls.t10 = _two_date_hole_csv(os.path.join(cls.tmp, "t10.csv"))
+        cls.t11 = _zoned_office_csv(os.path.join(cls.tmp, "t11.csv"), -7, {1, 3, 5, 6})
+        cls.t12 = _zoned_office_csv(os.path.join(cls.tmp, "t12.csv"), 10, {0, 2, 4, 5, 6})
+        t13_tz = timezone(timedelta(hours=-7))
+        t13_outage = (datetime(2026, 10, 14, 0, 0, tzinfo=t13_tz), datetime(2026, 10, 15, 12, 0, tzinfo=t13_tz))
+        cls.t13 = _zoned_office_csv(os.path.join(cls.tmp, "t13.csv"), -7, mon_fri, t13_outage)
 
     def _assert_scheduled_idle(self, path, tz):
         """Matching tz and no tz: no gaps, span rate, no inferred quota."""
@@ -875,6 +887,44 @@ class TestLocalClockGaps(unittest.TestCase):
         self.assertEqual(rep["analysis"]["usage_gaps"], [])
         self.assertIsNone(rep["plan"]["quota"])
         self.assertIsNone(rep["quota_inferred"])
+
+    def test_t11_split_monday_wednesday_friday_rest_is_not_a_gap(self):
+        self._assert_scheduled_idle(self.t11, timezone(timedelta(hours=-7)))
+        self.assertEqual(self._frame_hours(self.t11), (-9, {0, 2, 4}))
+
+    def test_t12_split_tuesday_thursday_rest_is_not_a_gap(self):
+        self._assert_scheduled_idle(self.t12, timezone(timedelta(hours=10)))
+        self.assertEqual(self._frame_hours(self.t12), (8, {1, 3}))
+
+    def test_t13_midweek_quota_gap_stays_one_gap(self):
+        for chosen in (timezone(timedelta(hours=-7)), None):
+            rep = advise.report(self.t13, PRICING, **({} if chosen is None else {"tz": chosen}))
+            res = rep["analysis"]
+            self.assertEqual(len(res["usage_gaps"]), 1, chosen)
+            gap = res["usage_gaps"][0]
+            self.assertAlmostEqual(gap["days"], 1.72, places=2, msg=chosen)
+            self.assertAlmostEqual(rep["plan"]["usd_per_week"],
+                                   res["total_usd"] * 7 / (res["span_days"] - gap["days"]), places=6)
+            self.assertEqual([c["partial"] for c in res["quota_cycles"]], [True])
+            self.assertIsNone(rep["plan"]["quota"])
+            self.assertIsNone(rep["quota_inferred"])
+            self.assertTrue(res["rest_days_judged"])
+            self.assertNotIn(REST_UNJUDGED_EN, advise.memo_md(rep, "en"))
+
+    def test_t14_under_two_weeks_warns_and_keeps_the_issue4_gap(self):
+        for chosen in (advise.parse_tz("+08:00"), None):
+            rep = advise.report(self.issue4, PRICING, **({} if chosen is None else {"tz": chosen}))
+            res = rep["analysis"]
+            self.assertFalse(res["rest_days_judged"], chosen)
+            self.assertEqual(len(res["usage_gaps"]), 1, chosen)
+            self.assertAlmostEqual(res["usage_gaps"][0]["days"], 3.01, places=2, msg=chosen)
+            self.assertIn(REST_UNJUDGED_EN, advise.memo_md(rep, "en"))
+            self.assertIn(REST_UNJUDGED_ZH, advise.memo_md(rep, "zh-TW"))
+        for chosen in (timezone(timedelta(hours=-7)), None):
+            rep = advise.report(self.t11, PRICING, **({} if chosen is None else {"tz": chosen}))
+            self.assertTrue(rep["analysis"]["rest_days_judged"], chosen)
+            self.assertNotIn(REST_UNJUDGED_EN, advise.memo_md(rep, "en"))
+            self.assertNotIn(REST_UNJUDGED_ZH, advise.memo_md(rep, "zh-TW"))
 
     def test_report_and_trend_tz_defaults_to_unset(self):
         parser = cli.build_parser()

@@ -66,8 +66,8 @@ def build_parser():
     s.add_argument("--gap", type=float, default=120, help="seconds between calls that still count as one wake-up")
     s.add_argument("--max-gap", type=float, default=analyze_usage.DEFAULT_MAX_GAP_HOURS,
                    help="hours; a zero-row stretch longer than this is a quota-gap candidate and counts only when it covers hours this export is normally busy (default 12). "
-                        "Days and hours use --tz when set, otherwise the quiet-point clock; a rest block is 1-3 consecutive weekdays, "
-                        "and in a one-week export a whole-day outage is treated as a rest day")
+                        "Days and hours use --tz when set, otherwise the quiet-point clock. A rest day is a weekday whose full dates (at least 2) are all empty. "
+                        "Under two weeks, rest days are not judged and a warning is printed. If an outage empties every full date of a weekday, that weekday is treated as rest")
     s.add_argument("--soft-cap", type=float, help="context quality soft cap (tokens)")
     s.add_argument("--org-out", help="write an org.json skeleton here")
     s.add_argument("--json", action="store_true")
@@ -79,8 +79,8 @@ def build_parser():
         s.add_argument("--gap", type=float, default=120, help="seconds between calls that still count as one wake-up")
         s.add_argument("--max-gap", type=float, default=analyze_usage.DEFAULT_MAX_GAP_HOURS,
                        help="hours; a zero-row stretch longer than this is a quota-gap candidate and counts only when it covers hours this export is normally busy (default 12). "
-                            "Days and hours use --tz when set, otherwise the quiet-point clock; a rest block is 1-3 consecutive weekdays, "
-                            "and in a one-week export a whole-day outage is treated as a rest day")
+                            "Days and hours use --tz when set, otherwise the quiet-point clock. A rest day is a weekday whose full dates (at least 2) are all empty. "
+                            "Under two weeks, rest days are not judged and a warning is printed. If an outage empties every full date of a weekday, that weekday is treated as rest")
         s.add_argument("--tz", default=None, help="time zone for days, e.g. +08:00 (default UTC)")
         s.add_argument("--json", action="store_true")
 

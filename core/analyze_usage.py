@@ -319,30 +319,11 @@ def _quiet_point_tz(rows):
     return _offset_tz((start + length // 2) % 24)
 
 
-def _one_cyclic_run(days):
-    """True when `days` is one contiguous block on the weekday circle (Sunday–Monday wraps)."""
-    s = sorted(set(days))
-    if len(s) <= 1:
-        return bool(s)
-    breaks = 0
-    for a, b in zip(s, s[1:]):
-        if b - a != 1:
-            breaks += 1
-    if (s[0] + 7) - s[-1] != 1:
-        breaks += 1
-    return breaks == 1
+def _covered_weekdays(local):
+    """Dates with rows, and full dates, both grouped by weekday.
 
-
-def _activity_clock(rows, tz):
-    """Busy hours and the rest block, both on `tz`.
-
-    An hour-of-day is busy when it has calls on at least half as many dates as the busiest hour.
-    A weekday is off when it has rows on fewer than half of its fully covered dates: whole
-    frame-dates strictly between the first and last row. A weekday with no covered date is
-    never off. The rest block is that off set when it is one cyclic run of 1–3 weekdays;
-    anything else (none, 4 or more, or a split run) leaves every weekday expected."""
-    local = [r["time"].astimezone(tz) for r in rows]
-    active_hours = _busy_hours(_hour_dates(local))
+    A full date is a frame-date strictly after the first row's date and strictly before the last.
+    Empty means that date is not in the row-date set."""
     on_dates = [set() for _ in range(7)]
     for t in local:
         on_dates[t.weekday()].add(t.date())
@@ -352,31 +333,86 @@ def _activity_clock(rows, tz):
     while day < last:
         covered[day.weekday()].append(day)
         day += timedelta(days=1)
-    off = []
+    return on_dates, covered
+
+
+def _rest_weekdays(on_dates, covered):
+    """(rest weekdays, judged).
+
+    Rest days are judged only when every weekday has at least 2 full dates. A judged weekday
+    is rest when every one of those dates is empty. Any set of weekdays can be rest; they do
+    not have to be adjacent. When some weekday has fewer than 2 full dates, nothing is rest."""
+    if any(len(days) < 2 for days in covered):
+        return set(), False
+    rest = set()
     for weekday, days in enumerate(covered):
-        if not days:
-            continue
-        present = sum(1 for d in days if d in on_dates[weekday])
-        if present < max(1, math.ceil(len(days) * 0.5)):
-            off.append(weekday)
-    rest = set(off) if 1 <= len(off) <= 3 and _one_cyclic_run(off) else set()
+        if days and all(d not in on_dates[weekday] for d in days):
+            rest.add(weekday)
+    return rest, True
+
+
+def _activity_clock(rows, tz):
+    """Busy hours and rest weekdays, both on `tz`.
+
+    An hour-of-day is busy when it has calls on at least half as many dates as the busiest hour.
+    A full date is a frame-date strictly after the first row's date and strictly before the last.
+    A weekday is rest when it has at least 2 full dates and every one of them is empty.
+    When some weekday has fewer than 2 full dates, rest days are not judged and the rest set is empty."""
+    local = [r["time"].astimezone(tz) for r in rows]
+    active_hours = _busy_hours(_hour_dates(local))
+    rest, _judged = _rest_weekdays(*_covered_weekdays(local))
     return active_hours, rest
 
 
-def _expected_active_hours(start, end, active_hours, weekly_off, tz):
+def _expected_active_hours(start, end, active_hours, weekly_off, tz, row_dates=None):
     """Full frame-hours inside (start, end) where this export's own pattern says a call belongs.
 
-    A weekday with no rows still counts, unless it is part of the 1–3 day rest block.
-    That is what separates a weekend from a day the quota wiped out."""
+    A date with no rows still counts, unless its weekday is rest. That separates a weekend
+    from a day the quota wiped out. When `row_dates` is set, rest days were not judged, so
+    only busy hours on dates that have rows count: a silence counts only when it starts or
+    ends inside busy hours."""
     local_end = end.astimezone(tz)
     t = start.astimezone(tz).replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     step = timedelta(hours=1)
     n = 0
     while t + step <= local_end:
-        if t.hour in active_hours and t.weekday() not in weekly_off:
-            n += 1
+        if t.hour in active_hours:
+            if row_dates is not None:
+                if t.date() in row_dates:
+                    n += 1
+            elif t.weekday() not in weekly_off:
+                n += 1
         t += step
     return n
+
+
+def _judge_gaps(rows, max_gap_hours, tz):
+    """(gaps, rest_days_judged, rest_days_warning).
+
+    `rest_days_warning` is set when rest days were not judged, the export covers at least
+    3 frame-dates, and at least one silence is longer than `max_gap_hours`. Fewer than 3
+    frame-dates still yield no gaps and no warning."""
+    if max_gap_hours < 0:
+        raise ValueError("max-gap must be >= 0 hours")
+    if len(rows) < 2:
+        return [], False, False
+    limit = max_gap_hours * 3600
+    candidates = []
+    for a, b in zip(rows, rows[1:]):
+        seconds = (b["time"] - a["time"]).total_seconds()
+        if seconds > limit:
+            candidates.append({"start": a["time"], "end": b["time"], "seconds": seconds, "days": seconds / 86400})
+    frame = tz if tz is not None else _quiet_point_tz(rows)
+    local = [r["time"].astimezone(frame) for r in rows]
+    rest, judged = _rest_weekdays(*_covered_weekdays(local))
+    if len({t.date() for t in local}) < 3 or not candidates:
+        return [], judged, False
+    active_hours = _busy_hours(_hour_dates(local))
+    row_dates = None if judged else {t.date() for t in local}
+    gaps = [g for g in candidates
+            if _expected_active_hours(g["start"], g["end"], active_hours, rest, frame, row_dates)
+            >= EXPECTED_ACTIVE_HOURS]
+    return gaps, judged, not judged
 
 
 def detect_usage_gaps(rows, max_gap_hours=DEFAULT_MAX_GAP_HOURS, tz=None):
@@ -385,32 +421,18 @@ def detect_usage_gaps(rows, max_gap_hours=DEFAULT_MAX_GAP_HOURS, tz=None):
     A silence longer than `max_gap_hours` is only a candidate. Days and hours use `tz`
     when it is given, otherwise the quiet-point frame (`_quiet_point_tz`). The silence
     counts when at least `EXPECTED_ACTIVE_HOURS` full frame-hours inside it are busy
-    and not on a 1–3 weekday rest block (see `_activity_clock`). Overnight quiet and
-    that rest block are not gaps. Rows on fewer than 3 frame-dates are too little to
-    tell a rest day from an outage, so no silence counts. Each gap runs from the last
+    and not on a rest day (see `_activity_clock`). A rest day is a weekday whose full
+    dates (at least 2) are all empty. Under two weeks (some weekday has fewer than 2
+    full dates) rest days are not judged: only busy hours on frame-dates that have rows
+    count, so a silence counts only when it starts or ends inside busy hours. Overnight
+    quiet and rest days are not gaps. Rows on fewer than 3 frame-dates are too little
+    to tell a rest day from an outage, so no silence counts. Each gap runs from the last
     call before the silence to the first call after it.
 
     Rows have no quota, limit or error field, and no plan cap, so those signals are not
     available; the break in the export's own daily/weekly clock is the evidence used."""
-    if max_gap_hours < 0:
-        raise ValueError("max-gap must be >= 0 hours")
-    if len(rows) < 2:
-        return []
-    limit = max_gap_hours * 3600
-    candidates = []
-    for a, b in zip(rows, rows[1:]):
-        seconds = (b["time"] - a["time"]).total_seconds()
-        if seconds > limit:
-            candidates.append({"start": a["time"], "end": b["time"], "seconds": seconds, "days": seconds / 86400})
-    if not candidates:
-        return []
-    frame = tz if tz is not None else _quiet_point_tz(rows)
-    if len({r["time"].astimezone(frame).date() for r in rows}) < 3:
-        return []
-    active_hours, weekly_off = _activity_clock(rows, frame)
-    return [g for g in candidates
-            if _expected_active_hours(g["start"], g["end"], active_hours, weekly_off, frame)
-            >= EXPECTED_ACTIVE_HOURS]
+    gaps, _judged, _warn = _judge_gaps(rows, max_gap_hours, tz)
+    return gaps
 
 
 def active_elapsed_days(t, t0, gaps):
@@ -514,7 +536,7 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
         raise UsageError(t("u.err_empty", lang))
     assign_units(rows)
     t0, t1 = rows[0]["time"], rows[-1]["time"]
-    raw_gaps = detect_usage_gaps(rows, max_gap_hours, tz=tz)
+    raw_gaps, rest_days_judged, rest_days_warning = _judge_gaps(rows, max_gap_hours, tz)
     # Rates use time the export actually covers. A hole that breaks the export's own clock
     # is the quota being empty, and folding it into the denominator makes the same pace look cheaper.
     span_days, active_days = span_and_active_days(t0, t1, raw_gaps)
@@ -611,6 +633,7 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
     return {"calibration": calibrate(units, total_usd, pricing), "anatomy": anatomy, "has_cost": has_cost,
             "period_start": t0.isoformat(), "period_end": t1.isoformat(), "span_days": span_days,
             "active_days": active_days, "usage_gaps": _public_gaps(raw_gaps),
+            "rest_days_judged": rest_days_judged, "rest_days_warning": rest_days_warning,
             "quota_cycles": quota_cycles(rows, raw_gaps, pricing, has_cost),
             "total_usd": total_usd, "rows": len(rows), "units": units,
             "findings": [dict(zip(("type", "unit", "detail", "usd", "advice"), f)) for f in findings]}

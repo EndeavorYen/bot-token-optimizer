@@ -873,11 +873,14 @@ def memo_md(rep, lang="en"):
 
     if rep.get("quota_omitted") == "no_gap":
         L += [t("m.quota_omitted", lang), ""]
+    rest_warning = t("m.rest_unjudged", lang) if res.get("rest_days_warning") else None
     if res.get("usage_gaps"):
         L += [f"### {t('m.quota_gap', lang)}", ""]
         for g in res["usage_gaps"]:
             L.append("- " + t("m.usage_gap", lang, start=_local_stamp(g["start"], tz),
                               end=_local_stamp(g["end"], tz), days=g["days"]))
+        if rest_warning:
+            L += ["", rest_warning]
         L += ["", t("m.denominator", lang, active=res["active_days"], span=res["span_days"],
                     gap=sum(g["days"] for g in res["usage_gaps"])), ""]
         for c in res.get("quota_cycles") or []:
@@ -888,6 +891,8 @@ def memo_md(rep, lang="en"):
         if inferred:
             L += ["", t("m.cycle_inferred", lang, days=inferred["days"])]
         L.append("")
+    elif rest_warning:
+        L += [rest_warning, ""]
 
     # where the money goes
     L += [f"## {t('m.where', lang)}", "", t("m.where_header", lang), "|---|---|---|---|---|---|"]
