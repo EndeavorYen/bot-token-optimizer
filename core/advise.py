@@ -311,9 +311,10 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
     An event matches from `event_early` to `event_window` seconds after its timestamp
     (default 0–30 s). A tie goes to the name that sorts first, the same rule schedule
     fires already use. What nothing claims stays unattributed. An event source that is
-    not reliable does not claim its wake-ups either: they stay in that remainder, not
-    under the source's name. The remainder mixes the user's messages, bot-to-bot pings
-    and event-triggered automations, and this function does not say which.
+    not reliable does not keep its wake-ups: matching runs again without it, so a
+    schedule or a reliable source can claim them. Only what is still unclaimed stays
+    in the remainder. The remainder mixes the user's messages, bot-to-bot pings and
+    event-triggered automations, and this function does not say which.
     """
     wakes = _wakes(rows, gap)
     starts = [w["start"] for w in wakes]
@@ -345,20 +346,50 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
                 dist = abs((starts[i] - f).total_seconds())
                 pairs.append((dist, source, ("event", source, j), i))
     pairs.sort(key=lambda p: (p[0], p[1]))
-    taken_w, taken_f = set(), set()
-    got = {sp["name"]: [] for sp in specs}
-    got_event = {source: [] for source in by_source}
-    for _, _, key, i in pairs:
-        kind, name, f = key
-        if i in taken_w or key in taken_f:
-            continue
-        taken_w.add(i)
-        taken_f.add(key)
-        (got_event if kind == "event" else got)[name].append(i)
     span_s = max((t1 - t0).total_seconds(), 1.0)
 
     def reliable(n, chance):
         return n >= 5 and n >= 3 * chance
+
+    def event_chance(times):
+        # All wake-ups eligible before matching. The count left afterwards is ~0
+        # when the log is dense, which forces chance to 0 and marks the source reliable.
+        return _match_chance(len(wakes), span_s, event_early, event_window, len(times))
+
+    def assign(active):
+        taken_w, taken_f = set(), set()
+        got = {sp["name"]: [] for sp in specs}
+        got_event = {source: [] for source in by_source}
+        for _, _, key, i in active:
+            kind, name, _fire = key
+            if i in taken_w or key in taken_f:
+                continue
+            taken_w.add(i)
+            taken_f.add(key)
+            (got_event if kind == "event" else got)[name].append(i)
+        return got, got_event, taken_w
+
+    # A dense log can sit closer to a wake-up than the schedule that would have
+    # matched it. Drop every source that fails the chance check, then match again
+    # without those pairs so schedules and reliable sources can claim the wake-ups.
+    # Repeat until a pass drops nothing: a source kept this pass can only gain
+    # matches once a rejected log is gone.
+    rejected = set()
+    rejected_claim = {}
+    while True:
+        active = [p for p in pairs if not (p[2][0] == "event" and p[2][1] in rejected)]
+        got, got_event, taken_w = assign(active)
+        dropped = []
+        for source, times in by_source.items():
+            if source in rejected:
+                continue
+            claimed = got_event[source]
+            if not reliable(len(claimed), event_chance(times)):
+                dropped.append(source)
+                rejected_claim[source] = claimed
+        if not dropped:
+            break
+        rejected.update(dropped)
 
     bots = []
     for sp in specs:
@@ -375,25 +406,27 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
                      "units": sorted({wakes[i]["unit"] for i in got[sp["name"]]}), "stats": st})
     bots.sort(key=lambda b: -(b["stats"]["usd"] if b["stats"] else 0))
     event_rows = []
-    # Units whose matches were rejected, so the remainder still replaces the bucket.
+    # Units whose rejected matches nobody else claimed, so the remainder still replaces the bucket.
     released_units = set()
     for source, times in by_source.items():
-        # All wake-ups eligible before matching. The count left afterwards is ~0
-        # when the log is dense, which forces chance to 0 and marks the source reliable.
-        chance = _match_chance(len(wakes), span_s, event_early, event_window, len(times))
-        claimed = got_event[source]
-        n = len(claimed)
-        is_reliable = reliable(n, chance)
-        if not is_reliable:
+        chance = event_chance(times)
+        if source in rejected:
+            claimed = rejected_claim[source]
+            kept = []
+            is_reliable = False
             for i in claimed:
-                taken_w.discard(i)
-                released_units.add(wakes[i]["unit"])
-            got_event[source] = []
-        st = wake_stats([wakes[i] for i in got_event[source]], pricing, has_cost, rate_days)
+                if i not in taken_w:
+                    released_units.add(wakes[i]["unit"])
+        else:
+            kept = got_event[source]
+            claimed = kept
+            is_reliable = reliable(len(kept), chance)
+        n = len(claimed)
+        st = wake_stats([wakes[i] for i in kept], pricing, has_cost, rate_days)
         event_rows.append({"name": source, "fires": len(times), "matched": n,
                            "match_rate": n / len(times) if times else 0.0,
                            "chance_matches": chance, "reliable": is_reliable,
-                           "units": sorted({wakes[i]["unit"] for i in got_event[source]}), "stats": st})
+                           "units": sorted({wakes[i]["unit"] for i in kept}), "stats": st})
     event_rows.sort(key=lambda e: -(e["stats"]["usd"] if e["stats"] else 0))
     touched = {u for b in bots for u in b["units"]}
     touched.update(u for e in event_rows for u in e["units"])

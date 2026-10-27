@@ -158,7 +158,11 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
         self.assertNotIn("line 1", msg)
 
     def test_tie_uses_the_schedule_name_order(self):
-        """Same distance from an hourly fire and an event: the name that sorts first wins."""
+        """Same distance from a daily fire and an event: the name that sorts first wins.
+
+        Six fires, so an event that wins every tie is reliable and keeps the wake-ups.
+        One fire is not enough: the event fails the chance check and the schedule matches again.
+        """
         def assigned(event_name):
             directory = tempfile.mkdtemp()
             csv_path = os.path.join(directory, "usage.csv")
@@ -166,20 +170,62 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
             events_path = os.path.join(directory, "events.tsv")
             with open(csv_path, "w", encoding="utf-8") as f:
                 f.write("timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens\n")
-                f.write("2026-10-12T00:00:10Z,,demo-model,20000,0,100\n")
+                for day in range(12, 18):
+                    f.write(f"2026-10-{day:02d}T00:00:10Z,,demo-model,20000,0,100\n")
             with open(sched_path, "w", encoding="utf-8") as f:
-                f.write("hourly every 60m in=demo-model\n")
+                f.write("hourly at 00:00 in=demo-model\n")
             with open(events_path, "w", encoding="utf-8") as f:
-                f.write(f"2026-10-12T00:00:00Z\t{event_name}\n")
+                for day in range(12, 18):
+                    f.write(f"2026-10-{day:02d}T00:00:00Z\t{event_name}\n")
             rep = advise.report(csv_path, PRICING, schedule_specs=schedules.load(sched_path),
                                 events=advise.load_events(events_path))
             att = rep["attribution"]
             hourly = next(b for b in att["bots"] if b["name"] == "hourly")
             event = next(e for e in att["events"] if e["name"] == event_name)
-            return hourly["matched"], event["matched"]
+            return hourly["matched"], event["matched"], event["reliable"]
 
-        self.assertEqual(assigned("zzz-event"), (1, 0))
-        self.assertEqual(assigned("aaa-event"), (0, 1))
+        self.assertEqual(assigned("zzz-event"), (6, 0, False))
+        self.assertEqual(assigned("aaa-event"), (0, 6, True))
+
+    def test_reliable_source_reclaims_wakes_a_dense_log_took(self):
+        """A source that stays reliable gets the wake-ups a rejected log had taken."""
+        start = datetime(2026, 10, 12, tzinfo=timezone.utc)
+        rows = ["timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens"]
+        events = []
+        # Six wakes sit next to ci-run. The dense log is farther away, so ci-run keeps them
+        # and stays reliable. Four more sit closer to a 30 s grid point than to ci-run.
+        for hour in range(6):
+            ev = start + timedelta(hours=hour, seconds=10)
+            wake = ev + timedelta(seconds=2)
+            events.append((ev, "ci-run"))
+            rows.append(f"{wake.strftime('%Y-%m-%dT%H:%M:%SZ')},,demo-model,20000,0,100")
+        for hour in range(6, 10):
+            ev = start + timedelta(hours=hour, seconds=10)
+            wake = ev + timedelta(seconds=25)
+            events.append((ev, "ci-run"))
+            rows.append(f"{wake.strftime('%Y-%m-%dT%H:%M:%SZ')},,demo-model,20000,0,100")
+        directory = tempfile.mkdtemp()
+        csv_path = os.path.join(directory, "usage.csv")
+        events_path = os.path.join(directory, "events.tsv")
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(rows) + "\n")
+        end = start + timedelta(hours=9, seconds=35)
+        with open(events_path, "w", encoding="utf-8") as f:
+            for ev, source in events:
+                f.write(f"{ev.strftime('%Y-%m-%dT%H:%M:%SZ')}\t{source}\n")
+            t = start
+            while t <= end:
+                f.write(f"{t.strftime('%Y-%m-%dT%H:%M:%SZ')}\tnoisy-webhook\n")
+                t += timedelta(seconds=30)
+        rep = advise.report(csv_path, PRICING, events=advise.load_events(events_path))
+        att = rep["attribution"]
+        ci = next(e for e in att["events"] if e["name"] == "ci-run")
+        noisy = next(e for e in att["events"] if e["name"] == "noisy-webhook")
+        self.assertEqual(ci["matched"], 10)
+        self.assertTrue(ci["reliable"])
+        self.assertFalse(noisy["reliable"])
+        self.assertIsNone(noisy["stats"])
+        self.assertEqual(sum(r["stats"]["wakes"] for r in att["remainder"]), 0)
 
     def test_issue5_paste_lists_bots_not_event_sources(self):
         """Issue #5 repro: 7 days, one hourly bot, 70 interactive wakes, 30 overnight chains."""
@@ -272,6 +318,117 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
             self.assertEqual(sum(r["stats"]["wakes"] for r in rep["attribution"]["remainder"]), 300)
             self.assertNotIn("hotspot", {a["code"] for a in rep["plan"]["actions"]})
             self.assertNotEqual((rep["plan"]["goal"] or {}).get("hotspot_unit"), "noisy-webhook")
+            md = advise.memo_md(rep, lang)
+            for phrase in phrases:
+                self.assertNotIn(phrase, md)
+
+    def test_rejected_dense_log_returns_wakes_to_the_schedule(self):
+        """Hourly wake-ups 45 s after each fire, and one source logged every 30 s.
+
+        The dense log is not reliable. Matching again without it gives those
+        wake-ups back to the schedule, which stays reliable. The memo does not
+        name the source in a hotspot, decide-hot, or goal-cut line.
+        """
+        start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        rows = ["timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens"]
+        for i in range(7 * 24):
+            t = start + timedelta(hours=i, seconds=45)
+            rows.append(f"{t.strftime('%Y-%m-%dT%H:%M:%SZ')},,demo-model,20000,0,100")
+        directory = tempfile.mkdtemp()
+        csv_path = os.path.join(directory, "usage.csv")
+        sched_path = os.path.join(directory, "schedules.txt")
+        events_path = os.path.join(directory, "events.tsv")
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(rows) + "\n")
+        with open(sched_path, "w", encoding="utf-8") as f:
+            f.write("hourly every 60m in=demo-model\n")
+        end = start + timedelta(hours=7 * 24 - 1, seconds=45)
+        with open(events_path, "w", encoding="utf-8") as f:
+            t = start
+            while t <= end:
+                f.write(f"{t.strftime('%Y-%m-%dT%H:%M:%SZ')}\twebhook\n")
+                t += timedelta(seconds=30)
+        specs = schedules.load(sched_path)
+        bare = advise.report(csv_path, PRICING, schedule_specs=specs)
+        bare_bot = next(b for b in bare["attribution"]["bots"] if b["name"] == "hourly")
+        self.assertEqual(bare_bot["fires"], 168)
+        self.assertGreaterEqual(bare_bot["matched"], 167)
+        self.assertTrue(bare_bot["reliable"])
+        events = advise.load_events(events_path)
+        banned = {
+            "en": (
+                "Wake webhook less often",
+                "Decide whether webhook's wake-up frequency",
+                "fewer wake-ups of webhook",
+            ),
+            "zh-TW": (
+                "減少 webhook 的喚醒次數",
+                "決定 webhook 的喚醒頻率",
+                "減少 webhook 的喚醒",
+                "webhook 的喚醒再減少",
+            ),
+        }
+        for lang, phrases in banned.items():
+            rep = advise.report(csv_path, PRICING, schedule_specs=specs, events=events,
+                                goal_usd_week=1, lang=lang)
+            att = rep["attribution"]
+            hourly = next(b for b in att["bots"] if b["name"] == "hourly")
+            self.assertEqual(hourly["fires"], 168)
+            self.assertGreaterEqual(hourly["matched"], 167)
+            self.assertTrue(hourly["reliable"])
+            ev = next(e for e in att["events"] if e["name"] == "webhook")
+            self.assertFalse(ev["reliable"])
+            self.assertIsNone(ev["stats"])
+            self.assertNotEqual((rep["plan"]["goal"] or {}).get("hotspot_unit"), "webhook")
+            for action in rep["plan"]["actions"]:
+                if action["code"] == "hotspot":
+                    self.assertNotEqual(action["unit"], "webhook")
+            md = advise.memo_md(rep, lang)
+            for phrase in phrases:
+                self.assertNotIn(phrase, md)
+
+    def test_sixty_second_log_over_random_traffic_is_not_the_hotspot(self):
+        """A weak event every 60 s over random traffic stays unreliable and unnamed as a cut."""
+        rng = random.Random(11)
+        start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        slot = 121
+        offsets = sorted(rng.sample(range(0, 7 * 24 * 3600 - slot, slot), 300))
+        rows = ["timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens"]
+        for off in offsets:
+            t = start + timedelta(seconds=off)
+            rows.append(f"{t.strftime('%Y-%m-%dT%H:%M:%SZ')},,demo-model,20000,0,200")
+        directory = tempfile.mkdtemp()
+        csv_path = os.path.join(directory, "usage.csv")
+        events_path = os.path.join(directory, "events.tsv")
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(rows) + "\n")
+        end = start + timedelta(seconds=offsets[-1])
+        with open(events_path, "w", encoding="utf-8") as f:
+            t = start
+            while t <= end:
+                f.write(f"{t.strftime('%Y-%m-%dT%H:%M:%SZ')}\tweak-log\n")
+                t += timedelta(seconds=60)
+        events = advise.load_events(events_path)
+        banned = {
+            "en": (
+                "Wake weak-log less often",
+                "Decide whether weak-log's wake-up frequency",
+                "fewer wake-ups of weak-log",
+            ),
+            "zh-TW": (
+                "減少 weak-log 的喚醒次數",
+                "決定 weak-log 的喚醒頻率",
+                "減少 weak-log 的喚醒",
+                "weak-log 的喚醒再減少",
+            ),
+        }
+        for lang, phrases in banned.items():
+            rep = advise.report(csv_path, PRICING, events=events, goal_usd_week=1, lang=lang)
+            ev = next(e for e in rep["attribution"]["events"] if e["name"] == "weak-log")
+            self.assertFalse(ev["reliable"])
+            self.assertIsNone(ev["stats"])
+            self.assertNotIn("hotspot", {a["code"] for a in rep["plan"]["actions"]})
+            self.assertNotEqual((rep["plan"]["goal"] or {}).get("hotspot_unit"), "weak-log")
             md = advise.memo_md(rep, lang)
             for phrase in phrases:
                 self.assertNotIn(phrase, md)
