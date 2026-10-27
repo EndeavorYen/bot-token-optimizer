@@ -9,7 +9,7 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from _paths import ROOT
 import advise
@@ -121,3 +121,104 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
             text = f.read()
         self.assertIn("Before proposing to pause any automation", text)
         self.assertIn("confirm the owner and the trigger first", text.lower())
+
+    def test_source_names_are_kept_exactly(self):
+        sources = ["trailing space ", " leading space", "中文名", "a\tb", "emoji 🚀"]
+        lines = ["# comment", ""]
+        rows = ["timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens"]
+        for n, source in enumerate(sources):
+            lines.append(f"2026-10-12T{n:02d}:00:00Z\t{source}")
+            wake = datetime(2026, 10, 12, n, 0, 2, tzinfo=timezone.utc)
+            rows.append(f"{wake.strftime('%Y-%m-%dT%H:%M:%SZ')},,demo-model,20000,0,100")
+        directory = tempfile.mkdtemp()
+        events_path = os.path.join(directory, "events.tsv")
+        csv_path = os.path.join(directory, "usage.csv")
+        with open(events_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(rows) + "\n")
+        events = advise.load_events(events_path)
+        self.assertEqual([ev["source"] for ev in events], sources)
+        rep = advise.report(csv_path, PRICING, events=events)
+        self.assertEqual([ev["name"] for ev in rep["attribution"]["events"]], sources)
+        self.assertTrue(all(ev["matched"] == 1 for ev in rep["attribution"]["events"]))
+
+    def test_whitespace_source_names_the_line(self):
+        text = "\n".join([
+            "2026-10-12T00:00:00Z\tok",
+            "2026-10-12T01:00:00Z\t   ",
+            "2026-10-12T02:00:00Z\t",
+        ])
+        with self.assertRaises(advise.EventError) as cm:
+            advise.parse_events(text)
+        msg = str(cm.exception)
+        self.assertIn("line 2", msg)
+        self.assertIn("line 3", msg)
+        self.assertNotIn("line 1", msg)
+
+    def test_tie_uses_the_schedule_name_order(self):
+        """Same distance from an hourly fire and an event: the name that sorts first wins."""
+        def assigned(event_name):
+            directory = tempfile.mkdtemp()
+            csv_path = os.path.join(directory, "usage.csv")
+            sched_path = os.path.join(directory, "schedules.txt")
+            events_path = os.path.join(directory, "events.tsv")
+            with open(csv_path, "w", encoding="utf-8") as f:
+                f.write("timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens\n")
+                f.write("2026-10-12T00:00:10Z,,demo-model,20000,0,100\n")
+            with open(sched_path, "w", encoding="utf-8") as f:
+                f.write("hourly every 60m in=demo-model\n")
+            with open(events_path, "w", encoding="utf-8") as f:
+                f.write(f"2026-10-12T00:00:00Z\t{event_name}\n")
+            rep = advise.report(csv_path, PRICING, schedule_specs=schedules.load(sched_path),
+                                events=advise.load_events(events_path))
+            att = rep["attribution"]
+            hourly = next(b for b in att["bots"] if b["name"] == "hourly")
+            event = next(e for e in att["events"] if e["name"] == event_name)
+            return hourly["matched"], event["matched"]
+
+        self.assertEqual(assigned("zzz-event"), (1, 0))
+        self.assertEqual(assigned("aaa-event"), (0, 1))
+
+    def test_issue5_paste_lists_bots_not_event_sources(self):
+        """Issue #5 repro: 7 days, one hourly bot, 70 interactive wakes, 30 overnight chains."""
+        start = datetime(2026, 10, 12, tzinfo=timezone.utc)
+        rows = ["timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens"]
+
+        def add(ts, inp, out, n=1, gap=8):
+            for i in range(n):
+                t = ts + timedelta(seconds=gap * i)
+                rows.append(f"{t.strftime('%Y-%m-%dT%H:%M:%SZ')},,demo-model,{inp},0,{out}")
+
+        t = start
+        while t < start + timedelta(days=7):
+            add(t + timedelta(seconds=5), 20000, 40)
+            t += timedelta(hours=1)
+        for day in range(7):
+            for hour in range(8, 18):
+                add(start + timedelta(days=day, hours=hour, minutes=15), 30000, 250)
+        event_times = []
+        for day in range(6):
+            for hour in range(5):
+                ev = start + timedelta(days=day, hours=hour, minutes=30)
+                event_times.append(ev)
+                add(ev + timedelta(seconds=2), 49000, 400, n=2)
+        directory = tempfile.mkdtemp()
+        csv_path = os.path.join(directory, "usage.csv")
+        sched_path = os.path.join(directory, "schedules.txt")
+        events_path = os.path.join(directory, "events.tsv")
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(rows) + "\n")
+        with open(sched_path, "w", encoding="utf-8") as f:
+            f.write("hourly every 60m in=demo-model\n")
+        with open(events_path, "w", encoding="utf-8") as f:
+            for ev in event_times:
+                f.write(f"{ev.strftime('%Y-%m-%dT%H:%M:%SZ')}\tci-run-created\n")
+        rep = advise.report(csv_path, PRICING, schedule_specs=schedules.load(sched_path),
+                            events=advise.load_events(events_path))
+        matched = next(e for e in rep["attribution"]["events"] if e["name"] == "ci-run-created")
+        self.assertEqual((matched["matched"], matched["fires"]), (30, 30))
+        md = advise.memo_md(rep, "en")
+        paste = md.split("### Paste to the main bot", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("hourly", paste)
+        self.assertNotIn("ci-run-created", paste)

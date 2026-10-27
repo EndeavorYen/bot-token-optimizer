@@ -206,18 +206,21 @@ def load_events(path):
 
 
 def parse_events(text):
-    """Lines of `timestamp<TAB>source`. Blank lines and full-line comments are ignored."""
+    """Lines of `timestamp<TAB>source`. Blank lines and full-line comments are ignored.
+
+    The source is everything after the first tab, unchanged. Spaces stay.
+    An empty or whitespace-only source is an error that names the line.
+    """
     out, errors = [], []
     for i, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
+        blank = raw.strip()
+        if not blank or blank.startswith("#"):
             continue
-        if "\t" not in line:
+        if "\t" not in raw:
             errors.append(f"line {i}: expected timestamp<TAB>source")
             continue
-        ts, source = line.split("\t", 1)
-        source = source.strip()
-        if not source:
+        ts, source = raw.split("\t", 1)
+        if not source.strip():
             errors.append(f"line {i}: missing source")
             continue
         try:
@@ -243,9 +246,10 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
 
     A schedule matches from `early` seconds before the fire to `window` seconds after it.
     An event matches from `event_early` to `event_window` seconds after its timestamp
-    (default 0–30 s). On a tie the event wins: its window is the tighter claim.
-    What nothing claims stays unattributed. That remainder mixes the user's messages,
-    bot-to-bot pings and event-triggered automations, and this function does not say which.
+    (default 0–30 s). A tie goes to the name that sorts first, the same rule schedule
+    fires already use. What nothing claims stays unattributed. That remainder mixes the
+    user's messages, bot-to-bot pings and event-triggered automations, and this function
+    does not say which.
     """
     wakes = _wakes(rows, gap)
     starts = [w["start"] for w in wakes]
@@ -263,7 +267,7 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
                 if sp["in"] and wakes[i]["unit"] != sp["in"]:
                     continue
                 dist = abs((starts[i] - f).total_seconds())
-                pairs.append((dist, 1, sp["name"], ("sched", sp["name"], f), i))
+                pairs.append((dist, sp["name"], ("sched", sp["name"], f), i))
     by_source = {}
     for ev in events:
         by_source.setdefault(ev["source"], []).append(ev["time"])
@@ -275,12 +279,12 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
             hi = bisect.bisect_right(starts, f + timedelta(seconds=event_window))
             for i in range(lo, hi):
                 dist = abs((starts[i] - f).total_seconds())
-                pairs.append((dist, 0, source, ("event", source, j), i))
-    pairs.sort(key=lambda p: (p[0], p[1], p[2]))
+                pairs.append((dist, source, ("event", source, j), i))
+    pairs.sort(key=lambda p: (p[0], p[1]))
     taken_w, taken_f = set(), set()
     got = {sp["name"]: [] for sp in specs}
     got_event = {source: [] for source in by_source}
-    for _, _, _, key, i in pairs:
+    for _, _, key, i in pairs:
         kind, name, f = key
         if i in taken_w or key in taken_f:
             continue
@@ -637,11 +641,12 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
             reqs = []
             for at in ats:
                 group = [p for p in ho if p["at"] == at]
-                named = [p["name"] for p in group if p["entity"]["kind"] in ("bot", "context", "event")]
+                named = [p["name"] for p in group if p["entity"]["kind"] in ("bot", "context")]
                 if any(p["entity"]["kind"] in ("bucket", "remainder") for p in group):
                     named.append(t("p.req.others", lang))
-                reqs.append(t("p.handover.req", lang, names=sep_.join(named), at=f"{at:,.0f}"))
-            a["request"] = reqs
+                if named:
+                    reqs.append(t("p.handover.req", lang, names=sep_.join(named), at=f"{at:,.0f}"))
+            a["request"] = reqs or None
             for x in absorbed:
                 actions.remove(x)
     plan_handover = {"sweep": sweep, "picks": picks, "blocked": blocked, "max_per_week": max_handovers_week,
