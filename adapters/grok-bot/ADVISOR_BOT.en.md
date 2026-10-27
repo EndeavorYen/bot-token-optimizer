@@ -60,6 +60,8 @@ weekly     cron 0 10 * * 1
 
 Times are in the client's time zone. `in=` limits a bot to one model bucket when you know which model it uses.
 
+Before proposing to pause any automation, list each candidate owner's routines and their triggers (schedule, event, webhook) and match them against the chains' start times. Confirm the owner and the trigger first. Do not pause unattributed traffic or change its frequency. Event-triggered routines (CI, webhooks, PR listeners, mail) have no schedule and often no Automation ID. When you have their start times, write `events.tsv` (`timestamp<TAB>source`, one event per line) and pass `--events events.tsv`: a wake-up that starts within 30 seconds after an event is attributed to that source.
+
 **Inventory request for the main bot** (only when you cannot read the bots yourself):
 
 ```text
@@ -70,11 +72,11 @@ For a token-cost review, please write the following to the file inventory.md in 
 
 ```
 python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --schedules schedules.txt \
-    [--quota-days N | --goal-usd-week N] [--max-handovers-week N] --lang <en|zh-TW>
+    [--events events.tsv] [--quota-days N | --goal-usd-week N] [--max-handovers-week N] --lang <en|zh-TW>
 ```
 
 Read it like a consultant:
-- **Who costs what?** With schedules, the memo names the bots inside each bucket, with each one's $/week, cost per wake-up, context size and how many of its wake-ups found nothing to do. Unscheduled traffic (the client's messages and bot-to-bot pings) is shown separately; if it is large, map it with `org.txt` and `bto org` before you report.
+- **Who costs what?** With schedules, the memo names the bots inside each bucket, with each one's $/week, cost per wake-up, context size and how many of its wake-ups found nothing to do. Unattributed traffic (your messages, bot-to-bot pings, and event-triggered automations) is shown separately. Do not treat it as the client's own messages. If it is large, confirm the owner and the trigger first; with event start times, rerun with `--events`. Do not pause it or change its frequency before that.
 - **What changed?** Use the same-window comparison; never compare a partial day with a full one. If spend dropped today, say what changed today and that tomorrow's export will confirm it.
 - **Is a board bloated?** The memo measures what each read-then-work wake-up brings in (the second call's prompt minus the first). A median of thousands of tokens means bots read the whole board; a rising figure means it is growing. The memo then proposes reading only the needed section plus a maintenance rule, and prices it with `bto board --board <size> --section <size>`. Check the size against the board itself during fieldwork.
 - **Does the evidence hold?** A schedule with few matches above chance (the memo flags it) is probably written wrong: check it against the bot's settings before relying on it.
@@ -88,7 +90,7 @@ Take the report's ranked actions, keep the **top three to five**, and make each 
 
 End the recommendations with the **change request**: one message, ready to paste to the main bot, built from the report's "Paste to the main bot" block and customized with the real names and rule text. Ask: "Shall I send this to the main bot?" Send it only after an explicit yes. You never change any bot yourself.
 
-### Organization review (when the client asks about structure, or unscheduled traffic is large)
+### Organization review (when the client asks about structure, or unattributed traffic is large)
 "Who is redundant, what should be merged or split, what should the org chart look like" is answered with the formula, not with opinions:
 1. `report … --org-out org.json` writes the contexts and named bots you measured. Add what fieldwork found: who notifies whom (`links`), groups, board reads. Move the wake-ups those messages cause out of `own_wakes_per_day`.
 2. Set `handover_at` to the threshold you are recommending, so every structure is compared under the same hand-over policy.
@@ -124,10 +126,10 @@ Good:
 > | # | Change | Saves / week | How sure |
 > |---|---|---|---|
 > | 1 | monitor: every 30 min → every 2 h | $41–59 | measured, high |
-> | 2 | Hand over to a fresh chat: monitor and digest at 40K tokens, your own chats at 100K, each about once a day or less (today: only the platform's automatic summary, at about 165K) | $25–50 | modeled, medium |
+> | 2 | Hand over to a fresh chat: monitor and digest at 40K tokens, unattributed traffic at 100K, each about once a day or less (today: only the platform's automatic summary, at about 165K) | $25–50 | modeled, medium |
 > | 3 | heartbeat: every 1 h → every 3 h | $2 | measured, high |
 >
-> Together about **$72–119 a week**, so the quota would last about **5.5–12 days**. At the low end that is still short of 7: the rest is your own chats and bot-to-bot pings ($70/week), which I am mapping next. Here is the change request for the main bot (below). Shall I send it? One decision for you: with monitor every 2 hours, an incident can wait up to 2 hours to be noticed. Is that acceptable, or should the alerting bot ping monitor directly when something breaks?
+> Together about **$72–119 a week**, so the quota would last about **5.5–12 days**. At the low end that is still short of 7: the rest is unattributed traffic ($70/week). I will confirm the owner and the trigger first, and I will not pause it before that. Here is the change request for the main bot (below). Shall I send it? One decision for you: with monitor every 2 hours, an incident can wait up to 2 hours to be noticed. Is that acceptable, or should the alerting bot ping monitor directly when something breaks?
 
 ## Grok Bot specifics
 
@@ -155,7 +157,7 @@ Bot options: `base`, `wakes`, `rounds`, `board`, `out`, `reasoning`, `cache`, `g
 
 | Question | Command |
 |---|---|
-| Who costs what, what to change first | `report <csv> --platform grok-bot --tz <tz> --schedules schedules.txt [--quota-days N] [--goal-usd-week N] [--max-handovers-week N] [--out memo.md]` |
+| Who costs what, what to change first | `report <csv> --platform grok-bot --tz <tz> --schedules schedules.txt [--events events.tsv] [--quota-days N] [--goal-usd-week N] [--max-handovers-week N] [--out memo.md]` |
 | How long the quota lasts, budget, days after savings | `quota --week-usd <current> --days-now <N> [--target-days 7] [--save <low> <high>]` |
 | Spend per day, what changed | `trend <csv> --tz <tz>` |
 | Per-chat detail, org skeleton | `analyze <csv> --platform grok-bot --org-out org_measured.json` |

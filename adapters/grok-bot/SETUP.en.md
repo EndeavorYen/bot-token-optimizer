@@ -185,7 +185,7 @@ Ask the main bot to list the advisor's groups, schedules and automations, and re
 Better not. Every group message makes it re-read its whole context, so you would be paying a consultant to sit in on every meeting. Hand it an export when you need it: same result, close to zero cost.
 
 **It says "Automation ID is empty, grouping by model". What does that mean?**
-The Grok Bot export usually cannot tell which bot spent the money, only which model was used (e.g. `grok-bot-default`). The advisor splits that bucket itself: scheduled bots wake at known times, so it matches each bot's schedule against the wake-up times in the export. What is left is your own messages and bot-to-bot pings, which it maps from who notifies whom.
+The Grok Bot export usually cannot tell which bot spent the money, only which model was used (e.g. `grok-bot-default`). The advisor splits that bucket itself: scheduled bots wake at known times, so it matches each bot's schedule against the wake-up times in the export. What is left is unattributed traffic (your messages, bot-to-bot pings, and event-triggered automations). It does not name an owner until you confirm one: match each candidate's triggers (schedule, event, webhook) to the wake-up times, or pass event start times with `--events`.
 
 **Are the dollars a real bill?**
 Not on plan billing (the export shows Included / Free). They are token-priced equivalents, useful for comparing options and as a measure of quota burn.

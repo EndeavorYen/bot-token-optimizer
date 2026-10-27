@@ -22,7 +22,7 @@ Overall confidence: **medium**.
 | monitor | `every 30m` | 317 / 336 | $78.70 | 50% | $0.248 | 109,470 | 64% |
 | digest | `at 09:00,18:00` | 14 / 14 | $6.35 | 4% | $0.452 | 90,978 | 0% |
 | heartbeat | `every 1h` | 168 / 168 | $3.47 | 2% | $0.021 | 30,033 | 65% |
-| grok-bot-default (unscheduled) | your messages and bot-to-bot pings | 242 | $69.77 | 44% | $0.287 | 109,084 | 0% |
+| grok-bot-default (unattributed) | unattributed traffic (your messages, bot-to-bot pings, and event-triggered automations) | 242 | $69.77 | 44% | $0.287 | 109,084 | 0% |
 
 Wake-ups are matched to the schedule that fired within 5 minutes before them, one per fire. “Nothing to do” = a single call writing at most 80 tokens.
 
@@ -46,10 +46,11 @@ Ranked by dollars × confidence ÷ effort. Savings overlap, so they are not simp
 | # | Action | Evidence | Saves / week | Confidence | Effort | Owner |
 |---|---|---|---|---|---|---|
 | 1 | **Run monitor every 2h instead of “every 30m”** | 64% of its 317 scheduled wake-ups made one call and wrote almost nothing (nothing to do), yet each re-read about 109,470 tokens for $0.248; it costs $78.70/week | $41.32–$59.02 (measured) | high | low | _to assign_ |
-| 2 | **Hand over to a fresh chat at a set threshold per bot** | every wake-up re-reads the whole context; typical now → threshold: grok-bot-default (unscheduled) 109,084 → 100,000 (≈6.6 hand-overs/week), monitor 109,470 → 40,000 (≈5.8 hand-overs/week), digest 90,978 → 40,000 (≈2.0 hand-overs/week) | $24.91–$49.81 (modeled) | medium | low | _to assign_ |
+| 2 | **Hand over to a fresh chat at a set threshold per bot** | every wake-up re-reads the whole context; typical now → threshold: grok-bot-default (unattributed) 109,084 → 100,000 (≈6.6 hand-overs/week), monitor 109,470 → 40,000 (≈5.8 hand-overs/week), digest 90,978 → 40,000 (≈2.0 hand-overs/week) | $24.91–$49.81 (modeled) | medium | low | _to assign_ |
 | 3 | **Run heartbeat every 3h instead of “every 1h”** | 65% of its 168 scheduled wake-ups made one call and wrote almost nothing (nothing to do), yet each re-read about 30,033 tokens for $0.021; it costs $3.47/week | $1.62–$2.31 (measured) | high | low | _to assign_ |
 | 4 | **Put the content in the notification instead of “go read the board”** | 19 wake-ups (3%) spend a full-context call just to fetch the work; mostly grok-bot-default | $1.34–$2.69 (measured) | medium | low | _to assign_ |
 | 5 | **Stop breaking the prompt cache mid-wake-up** | calls after the first one in a wake-up still paid $16.53 for uncached input; mostly grok-bot-default | $2.47–$4.94 (measured) | medium | medium | _to assign_ |
+| 6 | **Confirm the owner and trigger of unattributed traffic in grok-bot-default before changing it** | 44% of spend ($70/week) in grok-bot-default is unattributed traffic (your messages, bot-to-bot pings, and event-triggered automations). Context size and call count cannot name the owner. | — (judgment) | low | medium | _to assign_ |
 
 **How**
 
@@ -58,6 +59,7 @@ Ranked by dollars × confidence ÷ effort. Savings overlap, so they are not simp
 3. Change the schedule of heartbeat; if some checks are urgent, keep a fast path (a direct ping when the event happens) instead of polling.
 4. Inline small payloads; for large ones, name the exact section to read.
 5. Keep fixed instructions first and unchanged; avoid editing or re-ordering earlier messages and tool lists.
+6. Do not pause it or change its frequency. List each candidate owner's routines and their triggers (schedule, event, webhook) and match them to these wake-ups. Confirm owner and trigger first.
 
 ### Hand-over thresholds compared
 
@@ -86,8 +88,8 @@ Do not change anything else.
 
 ## Decisions and data needed
 
-- 44% of spend ($70/week) in grok-bot-default is unscheduled: your messages and bot-to-bot pings. Next analysis step: map who pings whom (org.txt) and run bto org to see which links cost the most.
-- Reaching $68/week needs about $19/week beyond these actions: choose between fewer wake-ups of grok-bot-default (unscheduled) (about 27% fewer) and a higher budget.
+- 44% of spend ($70/week) in grok-bot-default is unattributed traffic (your messages, bot-to-bot pings, and event-triggered automations). Confirm owner and trigger first: list each candidate owner's routines (schedule, event, webhook) and match them to these wake-ups, or pass event start times with --events. Do not pause it or change its frequency before that.
+- Reaching $68/week needs about $19/week beyond these actions: decide which work can run less often, or raise the budget.
 - 100% of calls have no Automation ID, so they are grouped by model (grok-bot-automation, grok-bot-default); each of those buckets mixes several bots. The schedules file attributes 56% of spend to 3 named bots; the rest stays unattributed. **How:** Get a per-bot split: export each bot separately (filter by bot) and run the report per file, or run recurring work as named automations so the id is filled.
 - There is no chat / thread id, so calls from different chats are mixed: context size, growth and resets are blended across chats. **How:** Export with a chat id; otherwise read the context size of the main chats directly (one sample per chat is enough).
 - Cost is plan-billed (Included / Free), so dollars are an equivalent priced from tokens, not a bill. Use them to compare options and as a proxy for quota burn. **How:** Nothing to fix; read the dollars as relative.

@@ -15,7 +15,7 @@
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-F2A541">
 </p>
 
-**bot-token-optimizer** finds where a team of persistent bots spends its tokens and shows how to stop the waste. It reads your usage export, names the bots behind each cost (even when the export cannot tell them apart), models how they wake each other up, and turns that into a plan: which bot to change, from what to what, how much it saves, and how the organization should look. Every figure comes from formulas you can check and numbers you can reproduce, and every change comes as a request you can paste straight into your bots.
+**bot-token-optimizer** finds where a team of persistent bots spends its tokens and shows how to stop the waste. It reads your usage export, names the scheduled bots behind each cost when a schedules file can tell them apart, models how they wake each other up, and turns that into a plan: which bot to change, from what to what, how much it saves, and how the organization should look. Every figure comes from formulas you can check and numbers you can reproduce, and every change comes as a request you can paste straight into your bots.
 
 > **In plain words**
 >
@@ -326,7 +326,7 @@ Longest hand-off chain: 5 hops (chief → lead → researcher → writer → rev
 
 How each number is made:
 
-- **Naming the bots.** Grok's export has no bot id, so calls are grouped by model. Scheduled bots wake at known times: a wake-up starting between 60 s before and 5 min after a fire is given to that schedule, nearest first, one wake-up per fire. Each bot then has its own spend, cost per wake-up, context and share of checks with nothing to do (one call, ≤ 80 output tokens). What is left is unscheduled traffic.
+- **Naming the bots.** Grok's export has no bot id, so calls are grouped by model. Scheduled bots wake at known times: a wake-up starting between 60 s before and 5 min after a fire is given to that schedule, nearest first, one wake-up per fire. Each bot then has its own spend, cost per wake-up, context and share of checks with nothing to do (one call, ≤ 80 output tokens). What no schedule claims is unattributed traffic (your messages, bot-to-bot pings, and event-triggered automations). `bto report --events events.tsv` (lines: `timestamp<TAB>source`) gives a wake-up that starts 0–30 s after a logged event to that source, nearest first, one wake-up per event, with the same chance check as schedules.
 - **Fewer scheduled checks.** With idle share $u$, the new interval is the old one $\div (1-u)$, rounded up to a round value; the saving is the measured cost per wake-up × the wake-ups removed.
 - **Hand-over thresholds.** For each context and each threshold $T$ from 40K to 150K, with a fresh chat starting at $C_f$ and growth $G$ tokens a week:
 
@@ -467,7 +467,7 @@ It gives direction and magnitude. On the synthetic sample the model reproduces a
 <details>
 <summary><b>My export cannot tell the bots apart.</b></summary>
 
-Common on Grok Bot, where Automation ID is often empty. List each bot's schedule in a schedules file and run `bto report --schedules`: scheduled wake-ups are matched to their bots by time, and what is left is shown as unscheduled traffic (your messages and bot-to-bot pings). The advisor bot reads the schedules from the bots' settings itself.
+Common on Grok Bot, where Automation ID is often empty. List each bot's schedule in a schedules file and run `bto report --schedules`: scheduled wake-ups are matched to their bots by time, and what is left is shown as unattributed traffic (your messages, bot-to-bot pings, and event-triggered automations). Pass event start times with `--events` to attribute event-triggered chains to their source. The advisor bot reads the schedules from the bots' settings itself.
 </details>
 
 <details>
@@ -484,7 +484,7 @@ No. Everything runs locally with no network calls, including the web calculator,
 
 ## Limits
 
-The model gives direction and magnitude, not an exact bill. It assumes every call re-reads the full context and treats growth between hand-overs as linear. It does not price the quality loss of long contexts or hand-overs, or cache-write premiums on vendors that charge them. Calibration so far is on synthetic data. The Grok Bot usage-events export is read as is, but it has no chat id and its Automation ID is often empty, so calls are grouped by model; schedules name the scheduled bots, while unscheduled traffic stays mixed and its growth (and so its hand-over count) is a lower estimate. A schedule matched little more often than chance is flagged. The redesign search is greedy and judges cost only: whether two jobs can share a bot is for a person to decide. Details in the [guide](docs/guide.en.md#limits-and-references).
+The model gives direction and magnitude, not an exact bill. It assumes every call re-reads the full context and treats growth between hand-overs as linear. It does not price the quality loss of long contexts or hand-overs, or cache-write premiums on vendors that charge them. Calibration so far is on synthetic data. The Grok Bot usage-events export is read as is, but it has no chat id and its Automation ID is often empty, so calls are grouped by model; schedules name the scheduled bots, while unattributed traffic stays mixed and its growth (and so its hand-over count) is a lower estimate. A schedule matched little more often than chance is flagged. The redesign search is greedy and judges cost only: whether two jobs can share a bot is for a person to decide. Details in the [guide](docs/guide.en.md#limits-and-references).
 
 ## Repository layout
 

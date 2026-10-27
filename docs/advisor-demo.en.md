@@ -27,7 +27,7 @@ The full memo it produces: [sample-memo-grok.en.md](sample-memo-grok.en.md).
 > | 3 | **heartbeat: every 1 h → every 3 h** (65% of its checks are idle) | $2 | measured, high |
 > | 4 | Put short content in the ping instead of "go read the board" | $1–3 | measured, medium |
 >
-> Together about **$72–119 a week**, counting each dollar once, so the quota would last about **5.5–12 days**. At the low end that is still short of 7. The rest sits in your own chats and bot-to-bot pings ($70/week), and I am mapping who pings whom next.
+> Together about **$72–119 a week**, counting each dollar once, so the quota would last about **5.5–12 days**. At the low end that is still short of 7. The rest sits in unattributed traffic ($70/week). I will confirm its owner and trigger before recommending a pause or a frequency change.
 >
 > Change request for the main bot:
 >
@@ -47,7 +47,7 @@ The full memo it produces: [sample-memo-grok.en.md](sample-memo-grok.en.md).
 
 **Advisor** *(sends the request to the main bot and relays its report)*:
 
-> Done: all five changes are in place. **Check on 26 October:** weekly spend ≤ $68, the quota lasting at least 7 days, and cache share ≥ 80%. Export the same seven days again then and I will compare like for like. Meanwhile I will map the unscheduled $70/week. Next time, start a fresh chat with me; it keeps my own costs down.
+> Done: all five changes are in place. **Check on 26 October:** weekly spend ≤ $68, the quota lasting at least 7 days, and cache share ≥ 80%. Export the same seven days again then and I will compare like for like. Meanwhile I will confirm who owns the unattributed $70/week before changing it. Next time, start a fresh chat with me; it keeps my own costs down.
 
 ---
 
