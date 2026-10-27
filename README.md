@@ -9,7 +9,7 @@
 <p align="center">
   <a href="pyproject.toml"><img alt="Version" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FEndeavorYen%2Fbot-token-optimizer%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version&color=5B6C8F"></a>
   <a href="https://github.com/EndeavorYen/bot-token-optimizer/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/EndeavorYen/bot-token-optimizer/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="Python 3.9+, standard library only" src="https://img.shields.io/badge/python-3.9%2B%20%C2%B7%20stdlib%20only-3776AB">
+  <img alt="Python 3.10+, standard library only" src="https://img.shields.io/badge/python-3.10%2B%20%C2%B7%20stdlib%20only-3776AB">
   <img alt="8 pricing presets" src="https://img.shields.io/badge/presets-xAI%20%C2%B7%20OpenAI%20%C2%B7%20Anthropic%20%C2%B7%20Google-0F8B8D">
   <a href="https://endeavoryen.github.io/bot-token-optimizer/calculator/"><img alt="Web calculator" src="https://img.shields.io/badge/try%20it-web%20calculator-2E86AB"></a>
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-F2A541">
