@@ -8,6 +8,9 @@
             decisions and data needed, KPIs with a check date, appendix
 
 Every number comes from analyze_usage / orgopt; this module only ranks and words them.
+Weekly rates, savings and quota math use active time: the calendar span minus
+quota-exhaustion gaps. A silence longer than `--max-gap` (default 12 h) counts
+only when it breaks the export's own daily or weekly activity clock.
 Evidence tiers:
     measured  dollars already spent on the pattern in the export (range: remove half to all of it)
     modeled   cost-model projection (confidence drops when calibration is off by more than 15%)
@@ -73,14 +76,44 @@ def _row_usd(r, pricing, has_cost):
     return orgopt.call_cost_usd(r["input"], r["cached"], r["output"] + r.get("reasoning", 0.0), pricing)
 
 
+def _rate_days(res):
+    """Denominator for per-day and per-week figures: calendar span minus quota gaps."""
+    days = res.get("active_days", res["span_days"])
+    return days if days > 0 else res["span_days"]
+
+
+def _active_midpoint(t0, t1, gaps):
+    """Instant at which half the active time (span with zero-row gaps removed) has elapsed."""
+    intervals, cursor = [], t0
+    for g in gaps:
+        if g["start"] > cursor:
+            intervals.append((cursor, g["start"]))
+        if g["end"] > cursor:
+            cursor = g["end"]
+    if t1 > cursor:
+        intervals.append((cursor, t1))
+    total = sum((b - a).total_seconds() for a, b in intervals)
+    half, acc = total / 2, 0.0
+    for a, b in intervals:
+        dur = (b - a).total_seconds()
+        if acc + dur >= half:
+            return a + timedelta(seconds=half - acc)
+        acc += dur
+    return t1
+
+
 # ---------------------------------------------------------------- trend
-def trend(rows, pricing, has_cost=False, tz=timezone.utc):
-    """Rows must already have gone through analyze_usage.analyze (unit and wake_start set)."""
+def trend(rows, pricing, has_cost=False, tz=None, max_gap_hours=None):
+    """Rows must already have gone through analyze_usage.analyze (unit and wake_start set).
+
+    `tz` None means display in UTC and judge quota gaps on the quiet-point frame.
+    A tz value is both the display clock and the gap clock."""
+    display = timezone.utc if tz is None else tz
     t0, t1 = rows[0]["time"], rows[-1]["time"]
-    first, last = t0.astimezone(tz), t1.astimezone(tz)
+    first, last = t0.astimezone(display), t1.astimezone(display)
     days = {}
     for r in rows:
-        lt = r["time"].astimezone(tz)
+        lt = r["time"].astimezone(display)
         d = lt.date().isoformat()
         e = days.setdefault(d, {"date": d, "usd": 0.0, "calls": 0, "wakes": 0, "units": {}})
         c = _row_usd(r, pricing, has_cost)
@@ -88,11 +121,22 @@ def trend(rows, pricing, has_cost=False, tz=timezone.utc):
         e["calls"] += 1
         e["wakes"] += bool(r.get("wake_start"))
         e["units"][r.get("unit", "")] = e["units"].get(r.get("unit", ""), 0.0) + c
+    cursor = first.date()
+    while cursor <= last.date():
+        key = cursor.isoformat()
+        if key not in days:
+            days[key] = {"date": key, "usd": 0.0, "calls": 0, "wakes": 0, "units": {}}
+        cursor += timedelta(days=1)
     table = [days[k] for k in sorted(days)]
+    edges = (first.date().isoformat(), last.date().isoformat())
     for e in table:
-        e["partial"] = e["date"] in (first.date().isoformat(), last.date().isoformat())
-        top = max(e["units"].items(), key=lambda kv: kv[1])
-        e["top_unit"], e["top_share"] = top[0], (top[1] / e["usd"] if e["usd"] else 0.0)
+        e["nodata"] = e["calls"] == 0
+        e["partial"] = e["date"] in edges and not e["nodata"]
+        if e["nodata"]:
+            e["top_unit"], e["top_share"] = "—", 0.0
+        else:
+            top = max(e["units"].items(), key=lambda kv: kv[1])
+            e["top_unit"], e["top_share"] = top[0], (top[1] / e["usd"] if e["usd"] else 0.0)
         del e["units"]
 
     same = None
@@ -100,18 +144,21 @@ def trend(rows, pricing, has_cost=False, tz=timezone.utc):
     if first.date() <= yday:
         cutoff = last.time()
         y_usd = sum(_row_usd(r, pricing, has_cost) for r in rows
-                    if r["time"].astimezone(tz).date() == yday and r["time"].astimezone(tz).time() <= cutoff)
+                    if r["time"].astimezone(display).date() == yday and r["time"].astimezone(display).time() <= cutoff)
         t_usd = days[last.date().isoformat()]["usd"]
         same = {"day": last.date().isoformat(), "until": last.strftime("%H:%M"), "today_usd": t_usd,
                 "yesterday_usd": y_usd, "change": (t_usd - y_usd) / y_usd if y_usd else math.nan,
                 "yesterday_partial": first.date() == yday}
 
-    span_days = max((t1 - t0).total_seconds() / 86400, 1 / 24)
+    raw_gaps = analyze_usage.detect_usage_gaps(
+        rows, analyze_usage.DEFAULT_MAX_GAP_HOURS if max_gap_hours is None else max_gap_hours, tz=tz)
+    span_days, active_days = analyze_usage.span_and_active_days(t0, t1, raw_gaps)
     total = sum(e["usd"] for e in table)
     changes = []
     if span_days >= SHORT_SPAN_DAYS:
-        mid = t0 + (t1 - t0) / 2
-        half = span_days / 2
+        # Split on active time so a quota hole in one half is not reported as a drop.
+        mid = _active_midpoint(t0, t1, raw_gaps) if raw_gaps else t0 + (t1 - t0) / 2
+        half = active_days / 2
         acc = {}
         for r in rows:
             k = 0 if r["time"] < mid else 1
@@ -125,8 +172,12 @@ def trend(rows, pricing, has_cost=False, tz=timezone.utc):
                             "wakes_day_before": w0 / half, "wakes_day_after": w1 / half,
                             "context_before": c0 / w0 if w0 else 0.0, "context_after": c1 / w1 if w1 else 0.0})
         changes.sort(key=lambda c: -abs(c["usd_day_after"] - c["usd_day_before"]))
-    return {"tz": _tz_name(tz), "days": table, "same_window": same, "changes": changes[:5],
-            "span_days": span_days, "usd_per_day": total / span_days, "usd_per_week": total / span_days * 7}
+    usage_gaps = [{"start": g["start"].isoformat(), "end": g["end"].isoformat(), "days": g["days"],
+                   "start_local": g["start"].astimezone(display).strftime("%Y-%m-%d %H:%M"),
+                   "end_local": g["end"].astimezone(display).strftime("%Y-%m-%d %H:%M")} for g in raw_gaps]
+    return {"tz": _tz_name(display), "days": table, "same_window": same, "changes": changes[:5],
+            "span_days": span_days, "active_days": active_days, "usage_gaps": usage_gaps,
+            "usd_per_day": total / active_days, "usd_per_week": total / active_days * 7}
 
 
 def _tz_name(tz):
@@ -141,15 +192,27 @@ def _tz_name(tz):
 def trend_md(tr, lang="en"):
     L = [f"## {t('tr.title', lang, tz=tr['tz'])}", "", t("tr.header", lang), "|---|---|---|---|---|---|"]
     for e in tr["days"]:
+        if e.get("nodata"):
+            note = t("tr.nodata", lang)
+        elif e["partial"]:
+            note = t("tr.partial", lang)
+        else:
+            note = ""
         L.append(f"| {e['date']} | ${e['usd']:,.2f} | {e['calls']:,} | {e['wakes']:,} | "
-                 f"{e['top_unit']} ({e['top_share']:.0%}) | {t('tr.partial', lang) if e['partial'] else ''} |")
+                 f"{e['top_unit']} ({e['top_share']:.0%}) | {note} |")
     L += ["", t("tr.rate", lang, wk=tr["usd_per_week"], day=tr["usd_per_day"])]
+    if tr.get("usage_gaps"):
+        L.append(t("tr.rate_active", lang, active=tr["active_days"], span=tr["span_days"],
+                   gap=sum(g["days"] for g in tr["usage_gaps"])))
+        for g in tr["usage_gaps"]:
+            L.append(t("tr.gap", lang, start=g["start_local"], end=g["end_local"], days=g["days"]))
     s = tr["same_window"]
     if s and not math.isnan(s["change"]):
         L += ["", t("tr.same", lang, day=s["day"], until=s["until"], a=s["today_usd"], b=s["yesterday_usd"], chg=s["change"])
               + (t("tr.same_partial", lang) if s["yesterday_partial"] else "")]
     if tr["changes"]:
-        L += ["", f"### {t('tr.changes', lang)}", "", t("tr.ch_header", lang), "|---|---|---|---|"]
+        title = t("tr.changes_active", lang) if tr.get("usage_gaps") else t("tr.changes", lang)
+        L += ["", f"### {title}", "", t("tr.ch_header", lang), "|---|---|---|---|"]
         for c in tr["changes"]:
             L.append(f"| {c['unit']} | ${c['usd_day_before']:,.2f} → ${c['usd_day_after']:,.2f} | "
                      f"{c['wakes_day_before']:.1f} → {c['wakes_day_after']:.1f} | "
@@ -170,7 +233,7 @@ def _wakes(rows, gap):
     return out
 
 
-def wake_stats(wakes, pricing, has_cost, span_days):
+def wake_stats(wakes, pricing, has_cost, rate_days):
     """Spend and shape of a set of wake-ups (one bot's, or what is left of a bucket)."""
     rows = [r for w in wakes for r in w["rows"]]
     n = len(wakes)
@@ -187,8 +250,8 @@ def wake_stats(wakes, pricing, has_cost, span_days):
     return {**analyze_usage.fetch_stats(rf), "read_first_wakes": len(rf),
             "growth_per_wake": sum(analyze_usage.wake_growth(w["rows"]) for w in wakes) / n,
             "series_growth_per_day": max(series_growth, 0.0),
-            "short_wakes": len(short), "short_usd": sum(orgopt.call_cost_usd(r["input"], r["cached"], r["output"], pricing) for r in short),"wakes": n, "usd": usd, "usd_week": usd * 7 / span_days, "per_wake": usd / n,
-            "wakes_per_day": n / span_days, "rounds_per_wake": len(rows) / n,
+            "short_wakes": len(short), "short_usd": sum(orgopt.call_cost_usd(r["input"], r["cached"], r["output"], pricing) for r in short),"wakes": n, "usd": usd, "usd_week": usd * 7 / rate_days, "per_wake": usd / n,
+            "wakes_per_day": n / rate_days, "rounds_per_wake": len(rows) / n,
             "C_p50": analyze_usage.percentile(ctx, 0.5), "C_p90": analyze_usage.percentile(ctx, 0.9),
             "cache_hit": sum(r["cached"] for r in rows) / inp if inp else 0.0,
             "idle_wakes": len(idle), "idle_share": len(idle) / n,
@@ -254,7 +317,7 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
     wakes = _wakes(rows, gap)
     starts = [w["start"] for w in wakes]
     t0, t1 = rows[0]["time"], rows[-1]["time"]
-    span_days = res["span_days"]
+    rate_days = _rate_days(res)
     specs = list(specs or [])
     events = list(events or [])
     fires, pairs = {}, []
@@ -302,7 +365,7 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
         free = sum(1 for i in eligible if i not in taken_w)
         n_fires = len(fires[sp["name"]])
         chance = _match_chance(free, span_s, early, window, n_fires)
-        st = wake_stats([wakes[i] for i in got[sp["name"]]], pricing, has_cost, span_days)
+        st = wake_stats([wakes[i] for i in got[sp["name"]]], pricing, has_cost, rate_days)
         n = len(got[sp["name"]])
         bots.append({"name": sp["name"], "schedule": sp["text"], "spec": sp,
                      "interval_min": schedules.interval_minutes(sp), "fires": n_fires,
@@ -314,7 +377,7 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
     for source, times in by_source.items():
         free = sum(1 for i in range(len(wakes)) if i not in taken_w)
         chance = _match_chance(free, span_s, event_early, event_window, len(times))
-        st = wake_stats([wakes[i] for i in got_event[source]], pricing, has_cost, span_days)
+        st = wake_stats([wakes[i] for i in got_event[source]], pricing, has_cost, rate_days)
         n = len(got_event[source])
         event_rows.append({"name": source, "fires": len(times), "matched": n,
                            "match_rate": n / len(times) if times else 0.0,
@@ -326,7 +389,7 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
     remainder = []
     for unit in sorted(touched):
         rest = [w for i, w in enumerate(wakes) if w["unit"] == unit and i not in taken_w]
-        st = wake_stats(rest, pricing, has_cost, span_days)
+        st = wake_stats(rest, pricing, has_cost, rate_days)
         if st:
             remainder.append({"unit": unit, "stats": st})
     total = res["total_usd"] or 1.0
@@ -500,7 +563,7 @@ def _entities(res, att, lang="en"):
 
 def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=None, lang="en",
          max_handovers_week=MAX_HANDOVERS_WEEK, quota_days=None, target_days=7):
-    wk = 7 / res["span_days"]
+    wk = 7 / _rate_days(res)
     week_usd = res["total_usd"] * wk
     quota = None
     if quota_days:
@@ -576,7 +639,7 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
             continue
         policy = e.get("C_peak") if e.get("sawtooth") else None      # the platform's own summarizing
         sec = min(e["fetch_p50"], BOARD_SECTION)
-        pings = e["read_first_wakes"] / res["span_days"]
+        pings = e["read_first_wakes"] / _rate_days(res)
         opt = orgopt.board_options(e["C_p50"], pings, e["fetch_p50"], sec, k=max(e["rounds_per_wake"] - 2, 0),
                                    cache_hit=e["cache_hit"], handover_at=policy, pricing=pricing)
         if opt["saving_section_usd_week"] > 0:
@@ -586,7 +649,7 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
         hi = sum(o["saving_section_usd_week"] for _, o, _ in big)
         sep_ = "、" if lang == "zh-TW" else ", "
         items = sep_.join(t("p.board_trim.item", lang, name=e["name"], f=f"{e['fetch_p50']:,.0f}",
-                            f90=f"{e['fetch_p90']:,.0f}", n=e["read_first_wakes"] / res["span_days"])
+                            f90=f"{e['fetch_p90']:,.0f}", n=e["read_first_wakes"] / _rate_days(res))
                           for e, _, _ in big[:3])
         growing = [e for e, _, _ in big if e.get("fetch_trend", 1) >= BOARD_GROWING]
         grow = t("p.board_trim.growing", lang, name=growing[0]["name"], r=growing[0]["fetch_trend"]) if growing else ""
@@ -608,7 +671,7 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
             # a smaller board also slows the context's growth, so the hand-overs below are priced on it
             for e, _, sec in big:
                 e["growth_week"] = max(0.0, e["growth_week"] - (e["fetch_p50"] - sec) * e["read_first_wakes"]
-                                       / res["span_days"] * 7)
+                                       / _rate_days(res) * 7)
                 e["board_trimmed"] = True
     # modeled: hand over to a fresh chat whenever a context passes a threshold T. Under that policy a
     # context averages about (fresh start + T) / 2, and it needs (growth per week) / (T - fresh start)
@@ -748,7 +811,7 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
 
 
 def kpis(res, pl, pricing, tz=timezone.utc, lang="en"):
-    wk = 7 / res["span_days"]
+    wk = 7 / _rate_days(res)
     units = res["units"]
     end = datetime.fromisoformat(res["period_end"]).astimezone(tz).date()
     check = (end + timedelta(days=7)).isoformat()
@@ -787,21 +850,39 @@ def kpis(res, pl, pricing, tz=timezone.utc, lang="en"):
 
 
 # ---------------------------------------------------------------- report / memo
+def _infer_quota_days(cycles):
+    """Latest complete cycle between real gaps.
+
+    The cycle before the first gap starts at the export boundary and is partial, so it is
+    not a measured quota. Quota days are inferred only once a later gap closes a full cycle.
+    """
+    complete = [c for c in cycles if not c["partial"] and c["days"] > 0]
+    return complete[-1] if complete else None
+
+
 def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, goal_usd_week=None,
-           tz=timezone.utc, handover_at=None, schedule_specs=None, lang="en",
-           max_handovers_week=MAX_HANDOVERS_WEEK, quota_days=None, target_days=7, events=None):
+           tz=None, handover_at=None, schedule_specs=None, lang="en",
+           max_handovers_week=MAX_HANDOVERS_WEEK, quota_days=None, target_days=7,
+           max_gap_hours=None, events=None):
     """Everything the memo needs. `schedule_specs` (from schedules.load) and `events` (from load_events)
-    split buckets into scheduled bots and event sources."""
+    split buckets into scheduled bots and event sources.
+
+    `tz` None displays days in UTC and judges quota gaps on the quiet-point frame. A tz value
+    is the clock for both."""
+    if max_gap_hours is None:
+        max_gap_hours = analyze_usage.DEFAULT_MAX_GAP_HOURS
+    display_tz = timezone.utc if tz is None else tz
     info = {}
     rows, mapping, skipped = analyze_usage.load_rows(csv_path, overrides, cached_separate, lang, info)
-    res = analyze_usage.analyze(rows, pricing, gap, has_cost="cost" in mapping, lang=lang)
+    res = analyze_usage.analyze(rows, pricing, gap, has_cost="cost" in mapping, lang=lang,
+                                max_gap_hours=max_gap_hours, tz=tz)
     res["column_mapping"], res["skipped_rows"], res["load_info"] = mapping, skipped, info
     from_model = {r["unit"] for r in rows if r.get("bot_from_model")}
     for u in res["units"]:
         u["from_model"] = u["unit"] in from_model
-    tr = trend(rows, pricing, "cost" in mapping, tz)
+    tr = trend(rows, pricing, "cost" in mapping, tz, max_gap_hours)
     gl = gaps(res, mapping, info, lang)
-    att = (attribute(rows, res, schedule_specs, pricing, "cost" in mapping, tz, gap, events=events)
+    att = (attribute(rows, res, schedule_specs, pricing, "cost" in mapping, display_tz, gap, events=events)
            if schedule_specs or events else None)
     if att:
         for g in gl:
@@ -815,12 +896,22 @@ def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, go
                                      n=sum(1 for e in att["events"] if e["stats"]))
                 if att["matched_share"] >= 0.3 and g["severity"] == "high":
                     g["severity"] = "medium"
+    inferred = None
+    quota_omitted = None
+    if quota_days is None:
+        inferred = _infer_quota_days(res.get("quota_cycles") or [])
+        if inferred:
+            inferred = dict(inferred, days=round(inferred["days"], 1))
+            quota_days = inferred["days"]
+        elif not res.get("usage_gaps"):
+            quota_omitted = "no_gap"
     pl = plan(res, tr, gl, pricing, goal_usd_week, handover_at, att, lang, max_handovers_week, quota_days, target_days)
     return {"analysis": res, "trend": tr, "gaps": gl, "plan": pl, "attribution": att,
-            "kpis": kpis(res, pl, pricing, tz, lang),
+            "quota_inferred": inferred, "quota_omitted": quota_omitted,
+            "kpis": kpis(res, pl, pricing, display_tz, lang),
             "pricing": {"model": pricing.get("model", "?"), **pricing["per_million"],
                         "long_context_threshold": pricing.get("long_context_threshold")},
-            "gap_seconds": gap, "tz": tz}
+            "gap_seconds": gap, "tz": display_tz}
 
 
 def org_skeleton(rep, horizon_days=7):
@@ -841,9 +932,13 @@ def _usd(x):
     return f"${x:,.0f}" if abs(x) >= 100 else f"${x:,.2f}"
 
 
+def _local_stamp(iso, tz):
+    return datetime.fromisoformat(iso).astimezone(tz).strftime("%Y-%m-%d %H:%M")
+
+
 def memo_md(rep, lang="en"):
     res, pl, tr = rep["analysis"], rep["plan"], rep["trend"]
-    wk = 7 / res["span_days"]
+    wk = 7 / _rate_days(res)
     units = res["units"]
     an = res["anatomy"]
     zh = lang == "zh-TW"
@@ -897,6 +992,29 @@ def memo_md(rep, lang="en"):
         why.append(t("m.conf_why_calib", lang, err=res["calibration"]["error"]))
     L += ["", t("m.conf", lang, c=t(f"m.lvl.{pl['confidence']}", lang),
                why=t("m.conf_why", lang, why=("；" if zh else "; ").join(why)) if why else ""), ""]
+
+    if rep.get("quota_omitted") == "no_gap":
+        L += [t("m.quota_omitted", lang), ""]
+    rest_warning = t("m.rest_unjudged", lang) if res.get("rest_days_warning") else None
+    if res.get("usage_gaps"):
+        L += [f"### {t('m.quota_gap', lang)}", ""]
+        for g in res["usage_gaps"]:
+            L.append("- " + t("m.usage_gap", lang, start=_local_stamp(g["start"], tz),
+                              end=_local_stamp(g["end"], tz), days=g["days"]))
+        if rest_warning:
+            L += ["", rest_warning]
+        L += ["", t("m.denominator", lang, active=res["active_days"], span=res["span_days"],
+                    gap=sum(g["days"] for g in res["usage_gaps"])), ""]
+        for c in res.get("quota_cycles") or []:
+            L.append("- " + t("m.cycle", lang, start=_local_stamp(c["start"], tz), end=_local_stamp(c["end"], tz),
+                              days=c["days"], usd=c["usd"], tokens=c["tokens"],
+                              partial=t("m.cycle_partial", lang) if c["partial"] else ""))
+        inferred = rep.get("quota_inferred")
+        if inferred:
+            L += ["", t("m.cycle_inferred", lang, days=inferred["days"])]
+        L.append("")
+    elif rest_warning:
+        L += [rest_warning, ""]
 
     # where the money goes
     L += [f"## {t('m.where', lang)}", "", t("m.where_header", lang), "|---|---|---|---|---|---|"]
@@ -1044,10 +1162,17 @@ def memo_md(rep, lang="en"):
     c = res["calibration"]
     p = rep["pricing"]
     thr = p.get("long_context_threshold")
-    L += ["", "---", "", f"### {t('m.appendix', lang)}", "",
-          "- " + t("m.ap_period", lang, start=local(res["period_start"]).strftime("%Y-%m-%d %H:%M"),
-                   end=local(res["period_end"]).strftime("%Y-%m-%d %H:%M") + f" ({rep['trend']['tz']})",
-                   days=res["span_days"], rows=res["rows"]),
+    L += ["", "---", "", f"### {t('m.appendix', lang)}", ""]
+    if res.get("usage_gaps"):
+        L.append("- " + t("m.ap_period_active", lang, start=local(res["period_start"]).strftime("%Y-%m-%d %H:%M"),
+                          end=local(res["period_end"]).strftime("%Y-%m-%d %H:%M") + f" ({rep['trend']['tz']})",
+                          days=res["span_days"], rows=res["rows"], active=res["active_days"],
+                          gap=sum(g["days"] for g in res["usage_gaps"])))
+    else:
+        L.append("- " + t("m.ap_period", lang, start=local(res["period_start"]).strftime("%Y-%m-%d %H:%M"),
+                          end=local(res["period_end"]).strftime("%Y-%m-%d %H:%M") + f" ({rep['trend']['tz']})",
+                          days=res["span_days"], rows=res["rows"]))
+    L += [
           "- " + t("m.ap_pricing", lang, model=p["model"], i=p["input"], c=p["cached_input"], o=p["output"],
                    thr=f"{thr:,}" if thr else "-"),
           "- " + t("m.ap_tiers", lang),

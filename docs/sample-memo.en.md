@@ -8,6 +8,8 @@
 
 Overall confidence: **high**.
 
+Quota days are omitted: this export has no exhaustion gap, so none are inferred. Pass --quota-days to set them.
+
 ## Where the money goes
 
 | Context | USD/week | Share | Wake-ups/day | Cost per wake-up | Typical context (p50 / p90) |

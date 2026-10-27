@@ -4,9 +4,77 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  commit-trailers:
+    # A squash merge onto the default branch is pushed by GitHub and can carry
+    # an automatic Co-authored-by line. Skip that push so main stays green.
+    # Pull requests and pushes to every other branch still fail the trailer.
+    if: github.event_name != 'push' || github.ref_name != github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No Co-authored-by trailers in new commits
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # Commits made before this check existed are not rewritten, so only new commits are checked.
+          # Push to the default branch is the squash-merge result. GitHub can insert
+          # Co-authored-by into that message; CONTRIBUTING requires the author to delete
+          # those lines. The check stays on pull requests and on other branch pushes.
+          if [ "$EVENT" = "push" ] && [ "$REF_NAME" = "$DEFAULT_BRANCH" ]; then
+            echo "push to ${DEFAULT_BRANCH}; trailer check runs on pull requests and other branches"
+            exit 0
+          fi
+          if [ "$EVENT" = "pull_request" ]; then
+            range="$PR_BASE..$PR_HEAD"
+          elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            range="origin/$DEFAULT_BRANCH..$SHA"
+          else
+            range="$BEFORE..$SHA"
+          fi
+          base="${range%%..*}"
+          if ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
+            echo "range base ${base} is unknown; fetching origin/main"
+            git fetch --no-tags origin main
+            range="origin/main..${GITHUB_SHA}"
+          fi
+          echo "checking ${range}"
+          commits=$(git rev-list "$range") || exit 1
+          if [ -z "$commits" ]; then
+            head="${range##*..}"
+            base="${range%%..*}"
+            if git merge-base --is-ancestor "$head" "$base" 2>/dev/null; then
+              echo "no new commits in ${range}"
+              exit 0
+            fi
+            echo "::error::commit list for ${range} is empty"
+            exit 1
+          fi
+          status=0
+          for c in $commits; do
+            git log -1 --format=%B "$c" > /tmp/msg
+            if ! sh hooks/commit-msg /tmp/msg; then
+              echo "::error::commit $c has a Co-authored-by trailer"
+              status=1
+            fi
+          done
+          exit $status
+
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         python: ["3.10", "3.11", "3.12", "3.13"]
@@ -29,6 +97,7 @@ jobs:
 
   docs:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
