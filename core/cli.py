@@ -65,7 +65,7 @@ def build_parser():
     s.add_argument("--cached-separate", action="store_true", help="cached tokens are NOT included in the input column")
     s.add_argument("--gap", type=float, default=120, help="seconds between calls that still count as one wake-up")
     s.add_argument("--max-gap", type=float, default=analyze_usage.DEFAULT_MAX_GAP_HOURS,
-                   help="hours; a zero-row stretch longer than this is excluded from rates (default 12)")
+                   help="hours; a zero-row stretch longer than this is a quota-gap candidate and counts only when it covers hours this export is normally busy (default 12)")
     s.add_argument("--soft-cap", type=float, help="context quality soft cap (tokens)")
     s.add_argument("--org-out", help="write an org.json skeleton here")
     s.add_argument("--json", action="store_true")
@@ -76,7 +76,7 @@ def build_parser():
         s.add_argument("--cached-separate", action="store_true", help="cached tokens are NOT included in the input column")
         s.add_argument("--gap", type=float, default=120, help="seconds between calls that still count as one wake-up")
         s.add_argument("--max-gap", type=float, default=analyze_usage.DEFAULT_MAX_GAP_HOURS,
-                       help="hours; a zero-row stretch longer than this is excluded from rates (default 12)")
+                       help="hours; a zero-row stretch longer than this is a quota-gap candidate and counts only when it covers hours this export is normally busy (default 12)")
         s.add_argument("--tz", default="UTC", help="time zone for days, e.g. +08:00 (default UTC)")
         s.add_argument("--json", action="store_true")
 
