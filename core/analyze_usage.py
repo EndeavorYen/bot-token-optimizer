@@ -16,7 +16,7 @@ import csv
 import json
 import math
 import statistics
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 try:
     from . import orgopt
@@ -47,6 +47,8 @@ SPLIT_LABEL = " + ".join(SPLIT_INPUT)
 CLOUD_AGENT_COL = "Cloud Agent ID"   # rows with an id here are one-shot cloud runs, not persistent bots
 RESET_DROP = 0.6        # a wake-up whose context is < 60% of the previous one ...
 RESET_MIN = 5000        # ... and at least 5K tokens smaller counts as a hand-over
+DEFAULT_MAX_GAP_HOURS = 12.0   # shorter silences are never quota gaps; longer ones still have to break the export's own clock
+EXPECTED_ACTIVE_HOURS = 3       # hours of predicted activity inside a silence before it counts as exhaustion
 
 
 class UsageError(ValueError):
@@ -249,6 +251,237 @@ def fetch_stats(read_first_wakes):
             "fetch_trend": statistics.median(late) / m0 if m0 else 1.0}
 
 
+def _hour_dates(local_times):
+    """Dates that have a call in each hour-of-day, on the clock `local_times` already use."""
+    by_hour = [set() for _ in range(24)]
+    for t in local_times:
+        by_hour[t.hour].add(t.date())
+    return by_hour
+
+
+def _busy_hours(by_hour):
+    """Hours with calls on at least half as many dates as the busiest hour."""
+    peak = max(len(s) for s in by_hour)
+    if peak == 0:
+        return set()
+    need = max(1, math.ceil(peak * 0.5))
+    return {h for h, s in enumerate(by_hour) if len(s) >= need}
+
+
+def _longest_quiet_run(busy):
+    """(start hour, length) of the longest cyclic run of hours that are not busy.
+
+    Ties keep the first run that starts after the earliest busy hour. None when every hour is busy."""
+    if len(busy) >= 24:
+        return None
+    quiet = [h not in busy for h in range(24)]
+    if not any(quiet):
+        return None
+    if all(quiet):
+        return 0, 24
+    origin = next(h for h in range(24) if not quiet[h])
+    rotated = quiet[origin:] + quiet[:origin]
+    best_len, best_start, i = 0, 0, 0
+    while i < 24:
+        if not rotated[i]:
+            i += 1
+            continue
+        j = i
+        while j < 24 and rotated[j]:
+            j += 1
+        length = j - i
+        if length > best_len:
+            best_len = length
+            best_start = (origin + i) % 24
+        i = j
+    return best_start, best_len
+
+
+def _offset_tz(boundary_hour):
+    """Fixed offset whose local midnight is `boundary_hour` UTC, wrapped to −11…+12."""
+    offset = (-boundary_hour) % 24
+    if offset > 12:
+        offset -= 24
+    if offset == 0:
+        return timezone.utc
+    return timezone(timedelta(hours=offset))
+
+
+def _quiet_point_tz(rows):
+    """Frame for an export with no `--tz`: the middle of the longest UTC quiet run.
+
+    A 24 h bot (every hour busy) stays on UTC. The boundary is `start + length // 2`."""
+    utc = [r["time"].astimezone(timezone.utc) for r in rows]
+    run = _longest_quiet_run(_busy_hours(_hour_dates(utc)))
+    if run is None:
+        return timezone.utc
+    start, length = run
+    return _offset_tz((start + length // 2) % 24)
+
+
+def _covered_weekdays(local):
+    """Dates with rows, and full dates, both grouped by weekday.
+
+    A full date is a frame-date strictly after the first row's date and strictly before the last.
+    Empty means that date is not in the row-date set."""
+    on_dates = [set() for _ in range(7)]
+    for t in local:
+        on_dates[t.weekday()].add(t.date())
+    first, last = local[0].date(), local[-1].date()
+    covered = [[] for _ in range(7)]
+    day = first + timedelta(days=1)
+    while day < last:
+        covered[day.weekday()].append(day)
+        day += timedelta(days=1)
+    return on_dates, covered
+
+
+def _rest_weekdays(on_dates, covered):
+    """(rest weekdays, judged).
+
+    Rest days are judged only when every weekday has at least 2 full dates. A judged weekday
+    is rest when every one of those dates is empty. Any set of weekdays can be rest; they do
+    not have to be adjacent. When some weekday has fewer than 2 full dates, nothing is rest."""
+    if any(len(days) < 2 for days in covered):
+        return set(), False
+    rest = set()
+    for weekday, days in enumerate(covered):
+        if days and all(d not in on_dates[weekday] for d in days):
+            rest.add(weekday)
+    return rest, True
+
+
+def _activity_clock(rows, tz):
+    """Busy hours and rest weekdays, both on `tz`.
+
+    An hour-of-day is busy when it has calls on at least half as many dates as the busiest hour.
+    A full date is a frame-date strictly after the first row's date and strictly before the last.
+    A weekday is rest when it has at least 2 full dates and every one of them is empty.
+    When some weekday has fewer than 2 full dates, rest days are not judged and the rest set is empty."""
+    local = [r["time"].astimezone(tz) for r in rows]
+    active_hours = _busy_hours(_hour_dates(local))
+    rest, _judged = _rest_weekdays(*_covered_weekdays(local))
+    return active_hours, rest
+
+
+def _expected_active_hours(start, end, active_hours, weekly_off, tz, row_dates=None):
+    """Full frame-hours inside (start, end) where this export's own pattern says a call belongs.
+
+    A date with no rows still counts, unless its weekday is rest. That separates a weekend
+    from a day the quota wiped out. When `row_dates` is set, rest days were not judged, so
+    only busy hours on dates that have rows count: a silence counts only when it starts or
+    ends inside busy hours."""
+    local_end = end.astimezone(tz)
+    t = start.astimezone(tz).replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    step = timedelta(hours=1)
+    n = 0
+    while t + step <= local_end:
+        if t.hour in active_hours:
+            if row_dates is not None:
+                if t.date() in row_dates:
+                    n += 1
+            elif t.weekday() not in weekly_off:
+                n += 1
+        t += step
+    return n
+
+
+def _judge_gaps(rows, max_gap_hours, tz):
+    """(gaps, rest_days_judged, rest_days_warning).
+
+    `rest_days_warning` is set when rest days were not judged, the export covers at least
+    3 frame-dates, and at least one silence is longer than `max_gap_hours`. Fewer than 3
+    frame-dates still yield no gaps and no warning."""
+    if max_gap_hours < 0:
+        raise ValueError("max-gap must be >= 0 hours")
+    if len(rows) < 2:
+        return [], False, False
+    limit = max_gap_hours * 3600
+    candidates = []
+    for a, b in zip(rows, rows[1:]):
+        seconds = (b["time"] - a["time"]).total_seconds()
+        if seconds > limit:
+            candidates.append({"start": a["time"], "end": b["time"], "seconds": seconds, "days": seconds / 86400})
+    frame = tz if tz is not None else _quiet_point_tz(rows)
+    local = [r["time"].astimezone(frame) for r in rows]
+    rest, judged = _rest_weekdays(*_covered_weekdays(local))
+    if len({t.date() for t in local}) < 3 or not candidates:
+        return [], judged, False
+    active_hours = _busy_hours(_hour_dates(local))
+    row_dates = None if judged else {t.date() for t in local}
+    gaps = [g for g in candidates
+            if _expected_active_hours(g["start"], g["end"], active_hours, rest, frame, row_dates)
+            >= EXPECTED_ACTIVE_HOURS]
+    return gaps, judged, not judged
+
+
+def detect_usage_gaps(rows, max_gap_hours=DEFAULT_MAX_GAP_HOURS, tz=None):
+    """Zero-row stretches that are quota exhaustion, not the export's own idle time.
+
+    A silence longer than `max_gap_hours` is only a candidate. Days and hours use `tz`
+    when it is given, otherwise the quiet-point frame (`_quiet_point_tz`). The silence
+    counts when at least `EXPECTED_ACTIVE_HOURS` full frame-hours inside it are busy
+    and not on a rest day (see `_activity_clock`). A rest day is a weekday whose full
+    dates (at least 2) are all empty. Under two weeks (some weekday has fewer than 2
+    full dates) rest days are not judged: only busy hours on frame-dates that have rows
+    count, so a silence counts only when it starts or ends inside busy hours. Overnight
+    quiet and rest days are not gaps. Rows on fewer than 3 frame-dates are too little
+    to tell a rest day from an outage, so no silence counts. Each gap runs from the last
+    call before the silence to the first call after it.
+
+    Rows have no quota, limit or error field, and no plan cap, so those signals are not
+    available; the break in the export's own daily/weekly clock is the evidence used."""
+    gaps, _judged, _warn = _judge_gaps(rows, max_gap_hours, tz)
+    return gaps
+
+
+def active_elapsed_days(t, t0, gaps):
+    """Days from `t0` to `t` with detected zero-row gaps removed."""
+    seconds = (t - t0).total_seconds()
+    for g in gaps:
+        if g["end"] <= t:
+            seconds -= g["seconds"]
+        elif g["start"] < t:
+            seconds -= (t - g["start"]).total_seconds()
+            break
+    return seconds / 86400
+
+
+def quota_cycles(rows, gaps, pricing, has_cost):
+    """One measured cycle per gap: spend and tokens from the previous resume (or the export
+    start, flagged partial) up to the call that precedes the silence."""
+    if not rows or not gaps:
+        return []
+    cycles, resume, partial = [], rows[0]["time"], True
+    for g in gaps:
+        window = [r for r in rows if resume <= r["time"] <= g["start"]]
+        if has_cost:
+            usd = sum(r["cost"] for r in window)
+        else:
+            usd = sum(orgopt.call_cost_usd(r["input"], r["cached"], r["output"] + r.get("reasoning", 0.0), pricing)
+                      for r in window)
+        tokens = sum(r["input"] + r["output"] + r.get("reasoning", 0.0) for r in window)
+        cycles.append({"start": resume.isoformat(), "end": g["start"].isoformat(),
+                       "days": (g["start"] - resume).total_seconds() / 86400,
+                       "usd": usd, "tokens": tokens, "partial": partial})
+        resume, partial = g["end"], False
+    return cycles
+
+
+def _public_gaps(gaps):
+    return [{"start": g["start"].isoformat(), "end": g["end"].isoformat(), "days": g["days"]} for g in gaps]
+
+
+def span_and_active_days(t0, t1, gaps):
+    """Calendar span and the rate denominator (span minus zero-row gaps), both in days."""
+    span_seconds = (t1 - t0).total_seconds()
+    span_days = max(span_seconds / 86400, 1 / 24)
+    if not gaps:
+        return span_days, span_days
+    active = max((span_seconds - sum(g["seconds"] for g in gaps)) / 86400, 1 / 24)
+    return span_days, active
+
+
 def sessionize(rows, gap_seconds):
     """Consecutive calls of one context no more than `gap` apart form one wake-up."""
     wakes, cur = [], []
@@ -297,13 +530,16 @@ def assign_units(rows):
 
 
 def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80, soft_cap=None,
-            has_cost=False, lang="en"):
+            has_cost=False, lang="en", max_gap_hours=DEFAULT_MAX_GAP_HOURS, tz=None):
     thr = pricing.get("long_context_threshold") or math.inf
     if not rows:
         raise UsageError(t("u.err_empty", lang))
     assign_units(rows)
     t0, t1 = rows[0]["time"], rows[-1]["time"]
-    span_days = max((t1 - t0).total_seconds() / 86400, 1 / 24)
+    raw_gaps, rest_days_judged, rest_days_warning = _judge_gaps(rows, max_gap_hours, tz)
+    # Rates use time the export actually covers. A hole that breaks the export's own clock
+    # is the quota being empty, and folding it into the denominator makes the same pace look cheaper.
+    span_days, active_days = span_and_active_days(t0, t1, raw_gaps)
     by_unit = {}
     for r in rows:
         by_unit.setdefault(r["unit"], []).append(r)
@@ -318,7 +554,7 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
             for j, r in enumerate(w):
                 r["wake_start"] = j == 0
         ctx = [w[0]["input"] for w in wakes]
-        days = [(w[0]["time"] - t0).total_seconds() / 86400 for w in wakes]
+        days = [active_elapsed_days(w[0]["time"], t0, raw_gaps) for w in wakes]
         growth, segments = growth_per_day(days, ctx)
         last = ctx[split_resets(days, ctx)[-1][0]:]
         c_now = statistics.median(last[-max(3, len(last) // 5):])
@@ -348,7 +584,7 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
             return (target - c_now) / growth if growth > 0 else math.inf
 
         units.append({
-            "unit": name, "calls": len(rs), "wakes": len(wakes), "wakes_per_day": len(wakes) / span_days,
+            "unit": name, "calls": len(rs), "wakes": len(wakes), "wakes_per_day": len(wakes) / active_days,
             "rounds_per_wake": len(rs) / len(wakes), "C_now": c_now, "C_max": max(ctx),
             "C_growth_per_day": growth, "resets_seen": len(segments) - 1, "segments": segments,
             "days_to_long_context": days_to(thr), "days_to_soft_cap": days_to(soft_cap) if soft_cap else None,
@@ -396,6 +632,9 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
                 "miss_premium_usd", "in_wake_miss_premium_usd", "short_wake_usd", "read_first_usd")}
     return {"calibration": calibrate(units, total_usd, pricing), "anatomy": anatomy, "has_cost": has_cost,
             "period_start": t0.isoformat(), "period_end": t1.isoformat(), "span_days": span_days,
+            "active_days": active_days, "usage_gaps": _public_gaps(raw_gaps),
+            "rest_days_judged": rest_days_judged, "rest_days_warning": rest_days_warning,
+            "quota_cycles": quota_cycles(rows, raw_gaps, pricing, has_cost),
             "total_usd": total_usd, "rows": len(rows), "units": units,
             "findings": [dict(zip(("type", "unit", "detail", "usd", "advice"), f)) for f in findings]}
 
@@ -430,7 +669,11 @@ def org_skeleton(res, horizon_days=7, lang="en"):
 
 def report_md(res, lang="en"):
     L = [f"## {t('u.title', lang, start=res['period_start'][:16], end=res['period_end'][:16], days=res['span_days'], rows=res['rows'])}",
-         "", t("u.total", lang, usd=res["total_usd"]), "", t("u.unit_note", lang), "",
+         ""]
+    if res.get("usage_gaps"):
+        items = "; ".join(f"{g['start'][:16]} – {g['end'][:16]} ({g['days']:.1f} d)" for g in res["usage_gaps"])
+        L += [t("u.gap_note", lang, items=items, active=res["active_days"], span=res["span_days"]), ""]
+    L += [t("u.total", lang, usd=res["total_usd"]), "", t("u.unit_note", lang), "",
          t("u.header", lang), "|---|---|---|---|---|---|---|---|---|---|"]
     for u in res["units"]:
         L.append(f"| {u['unit']} | {u['share']:.0%} | {u['calls']} | {u['wakes_per_day']:.1f} | {u['rounds_per_wake']:.1f} | "
@@ -473,10 +716,12 @@ def notes(mapping, skipped, lang="en", info=None):
     return out
 
 
-def run(csv_path, pricing, overrides=None, cached_separate=False, gap=120, soft_cap=None, lang="en"):
+def run(csv_path, pricing, overrides=None, cached_separate=False, gap=120, soft_cap=None, lang="en",
+        max_gap_hours=DEFAULT_MAX_GAP_HOURS):
     info = {}
     rows, mapping, skipped = load_rows(csv_path, overrides, cached_separate, lang, info)
-    res = analyze(rows, pricing, gap, soft_cap=soft_cap, has_cost="cost" in mapping, lang=lang)
+    res = analyze(rows, pricing, gap, soft_cap=soft_cap, has_cost="cost" in mapping, lang=lang,
+                  max_gap_hours=max_gap_hours)
     res["column_mapping"], res["skipped_rows"], res["load_info"] = mapping, skipped, info
     return res
 

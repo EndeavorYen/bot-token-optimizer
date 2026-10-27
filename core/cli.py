@@ -64,6 +64,10 @@ def build_parser():
     s.add_argument("--map", action="append", default=[], help="field=CSV column, e.g. --map bot=Agent")
     s.add_argument("--cached-separate", action="store_true", help="cached tokens are NOT included in the input column")
     s.add_argument("--gap", type=float, default=120, help="seconds between calls that still count as one wake-up")
+    s.add_argument("--max-gap", type=float, default=analyze_usage.DEFAULT_MAX_GAP_HOURS,
+                   help="hours; a zero-row stretch longer than this is a quota-gap candidate and counts only when it covers hours this export is normally busy (default 12). "
+                        "Days and hours use --tz when set, otherwise the quiet-point clock. A rest day is a weekday whose full dates (at least 2) are all empty. "
+                        "Under two weeks, rest days are not judged and a warning is printed. If an outage empties every full date of a weekday, that weekday is treated as rest")
     s.add_argument("--soft-cap", type=float, help="context quality soft cap (tokens)")
     s.add_argument("--org-out", help="write an org.json skeleton here")
     s.add_argument("--json", action="store_true")
@@ -73,7 +77,11 @@ def build_parser():
         s.add_argument("--map", action="append", default=[], help="field=CSV column, e.g. --map bot=Agent")
         s.add_argument("--cached-separate", action="store_true", help="cached tokens are NOT included in the input column")
         s.add_argument("--gap", type=float, default=120, help="seconds between calls that still count as one wake-up")
-        s.add_argument("--tz", default="UTC", help="time zone for days, e.g. +08:00 (default UTC)")
+        s.add_argument("--max-gap", type=float, default=analyze_usage.DEFAULT_MAX_GAP_HOURS,
+                       help="hours; a zero-row stretch longer than this is a quota-gap candidate and counts only when it covers hours this export is normally busy (default 12). "
+                            "Days and hours use --tz when set, otherwise the quiet-point clock. A rest day is a weekday whose full dates (at least 2) are all empty. "
+                            "Under two weeks, rest days are not judged and a warning is printed. If an outage empties every full date of a weekday, that weekday is treated as rest")
+        s.add_argument("--tz", default=None, help="time zone for days, e.g. +08:00 (default UTC)")
         s.add_argument("--json", action="store_true")
 
     s = sub.add_parser("report", parents=[common], help="one-page consultant memo from a usage CSV")
@@ -220,7 +228,7 @@ def _load(path, lang):
 def _run(a, lang, pricing, cap):
     if a.cmd == "analyze":
         overrides = dict(m.split("=", 1) for m in a.map)
-        res = analyze_usage.run(a.csv, pricing, overrides, a.cached_separate, a.gap, a.soft_cap, lang)
+        res = analyze_usage.run(a.csv, pricing, overrides, a.cached_separate, a.gap, a.soft_cap, lang, a.max_gap)
         if a.org_out:
             with open(a.org_out, "w", encoding="utf-8") as f:
                 json.dump(analyze_usage.org_skeleton(res, lang=lang), f, ensure_ascii=False, indent=2)
@@ -231,12 +239,12 @@ def _run(a, lang, pricing, cap):
             print(analyze_usage.report_md(res, lang))
     elif a.cmd in ("report", "trend"):
         overrides = dict(m.split("=", 1) for m in a.map)
-        tz = advise.parse_tz(a.tz)
+        tz = None if a.tz is None else advise.parse_tz(a.tz)
         specs = schedules.load(a.schedules) if getattr(a, "schedules", None) else None
         rep = advise.report(a.csv, pricing, overrides, a.cached_separate, a.gap,
                             getattr(a, "goal_usd_week", None), tz, getattr(a, "handover_at", None), specs, lang,
                             getattr(a, "max_handovers_week", 7), getattr(a, "quota_days", None),
-                            getattr(a, "target_days", 7))
+                            getattr(a, "target_days", 7), a.max_gap)
         if a.cmd == "trend":
             _dump(rep["trend"]) if a.json else print(advise.trend_md(rep["trend"], lang))
         else:

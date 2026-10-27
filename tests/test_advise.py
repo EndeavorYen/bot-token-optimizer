@@ -1,4 +1,5 @@
 """Consultant layer: cost anatomy, data gaps, trend, ranked plan and the one-page memo."""
+import csv
 import io
 import json
 import math
@@ -449,6 +450,487 @@ class TestQuota(unittest.TestCase):
         self.assertIn("the quota lasts 3 days", md)
         self.assertIn("Days the quota lasts", md)
         self.assertAlmostEqual(rep["plan"]["goal"]["target"], rep["plan"]["usd_per_week"] * 3 / 7)
+
+
+GROK_START = datetime(2026, 10, 12, tzinfo=timezone.utc)
+
+
+def _drop_window(src, dst, start, lo_days, hi_days):
+    """Copy a usage CSV without rows in [start+lo, start+hi)."""
+    lo = start + timedelta(days=lo_days)
+    hi = start + timedelta(days=hi_days)
+    with open(src, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+    kept = [rows[0]]
+    for r in rows[1:]:
+        t = datetime.fromisoformat(r[0].replace("Z", "+00:00"))
+        if lo <= t < hi:
+            continue
+        kept.append(r)
+    with open(dst, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f, quoting=csv.QUOTE_ALL).writerows(kept)
+    return dst
+
+
+def _uniform_gap_csv(path):
+    """Hourly calls, one 72 h zero-row stretch, constant token size. No real user data."""
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    stamps = [start + timedelta(hours=h) for h in range(48)]
+    stamps += [start + timedelta(hours=119 + h) for h in range(25)]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["timestamp", "bot", "chat_id", "input_tokens", "cached_input_tokens", "output_tokens"])
+        for t in stamps:
+            w.writerow([t.strftime("%Y-%m-%dT%H:%M:%SZ"), "meter", "c1", 1000, 200, 50])
+    return path, start
+
+
+class TestQuotaExhaustionGap(unittest.TestCase):
+    """A multi-day zero-row stretch is quota exhaustion, not a slower week."""
+
+    @classmethod
+    def setUpClass(cls):
+        tmp = tempfile.mkdtemp()
+        cls.tz = advise.parse_tz("+08:00")
+        cls.full = make_grok_export.generate(os.path.join(tmp, "full.csv"))
+        cls.gap = _drop_window(cls.full, os.path.join(tmp, "gap.csv"), GROK_START, 2.5, 5.5)
+        cls.full_rep = advise.report(cls.full, PRICING, tz=cls.tz, quota_days=3)
+        cls.gap_rep = advise.report(cls.gap, PRICING, tz=cls.tz, quota_days=3)
+        cls.uniform, cls.uniform_start = _uniform_gap_csv(os.path.join(tmp, "uniform.csv"))
+        cls.uniform_rep = advise.report(cls.uniform, PRICING, tz=cls.tz)
+
+    def test_weekly_rate_quota_and_savings_match_the_ungapped_export(self):
+        full, gap = self.full_rep["plan"], self.gap_rep["plan"]
+        self.assertAlmostEqual(gap["usd_per_week"], full["usd_per_week"], delta=0.05 * full["usd_per_week"])
+        self.assertEqual(gap["quota"]["days_now"], 3)
+        self.assertAlmostEqual(gap["quota"]["budget_usd_week"], full["quota"]["budget_usd_week"],
+                               delta=0.05 * full["quota"]["budget_usd_week"])
+        for key in ("days_after_low", "days_after_high"):
+            self.assertAlmostEqual(gap["quota"][key], full["quota"][key], delta=0.05 * abs(full["quota"][key]) + 0.05)
+        full_s = {a["code"]: a["usd_week_high"] for a in full["actions"]}
+        gap_s = {a["code"]: a["usd_week_high"] for a in gap["actions"]}
+        for code, usd in full_s.items():
+            self.assertIn(code, gap_s)
+            self.assertAlmostEqual(gap_s[code], usd, delta=0.15 * usd + 0.05)
+        self.assertAlmostEqual(gap["combined_low"], full["combined_low"], delta=0.15 * full["combined_low"] + 0.05)
+        self.assertAlmostEqual(gap["combined_high"], full["combined_high"], delta=0.15 * full["combined_high"] + 0.05)
+        # a passed --quota-days is not replaced by the measured cycle
+        self.assertIsNone(self.gap_rep["quota_inferred"])
+
+    def test_report_names_gap_dates_length_and_denominator(self):
+        res = self.gap_rep["analysis"]
+        self.assertEqual(len(res["usage_gaps"]), 1)
+        g = res["usage_gaps"][0]
+        self.assertGreater(g["days"], 3.0)
+        self.assertLess(g["days"], 3.5)
+        self.assertAlmostEqual(res["active_days"], res["span_days"] - g["days"], places=6)
+        self.assertGreater(res["span_days"], res["active_days"] + 2)
+        md = advise.memo_md(self.gap_rep, "en")
+        start = datetime.fromisoformat(g["start"]).astimezone(self.tz).strftime("%Y-%m-%d %H:%M")
+        end = datetime.fromisoformat(g["end"]).astimezone(self.tz).strftime("%Y-%m-%d %H:%M")
+        self.assertIn(start, md)
+        self.assertIn(end, md)
+        self.assertIn(f"{g['days']:.1f}", md)
+        self.assertIn(f"{res['active_days']:.1f} active days", md)
+        self.assertIn(f"{res['span_days']:.1f}", md)
+        zh = advise.memo_md(self.gap_rep, "zh-TW")
+        self.assertIn("額度缺口", zh)
+        self.assertIn(f"{res['active_days']:.1f}", zh)
+
+    def test_trend_lists_missing_days_and_does_not_call_the_gap_a_drop(self):
+        tr = self.gap_rep["trend"]
+        missing = [e for e in tr["days"] if e["calls"] == 0]
+        self.assertGreaterEqual(len(missing), 2)
+        self.assertTrue(all(e["nodata"] and e["usd"] == 0 and e["wakes"] == 0 for e in missing))
+        text = advise.trend_md(tr, "en")
+        self.assertIn("no data", text)
+        self.assertIn("active days", text)
+        ch = {c["unit"]: c for c in tr["changes"]}["grok-bot-default"]
+        self.assertGreater(ch["usd_day_after"], ch["usd_day_before"] * 0.9)
+
+        utr = self.uniform_rep["trend"]
+        self.assertGreaterEqual(sum(1 for e in utr["days"] if e["nodata"]), 2)
+        uch = utr["changes"][0]
+        self.assertLess(abs(uch["usd_day_after"] - uch["usd_day_before"]) / uch["usd_day_before"], 0.1)
+        # the same rows over the calendar span would report a much cheaper week
+        span = self.uniform_rep["analysis"]["span_days"]
+        active = self.uniform_rep["analysis"]["active_days"]
+        diluted = self.uniform_rep["analysis"]["total_usd"] * 7 / span
+        self.assertLess(diluted, self.uniform_rep["plan"]["usd_per_week"] * 0.7)
+        self.assertAlmostEqual(self.uniform_rep["plan"]["usd_per_week"],
+                               self.uniform_rep["analysis"]["total_usd"] * 7 / active, places=6)
+
+    def test_synthetic_gap_reports_one_quota_cycle(self):
+        res = self.uniform_rep["analysis"]
+        self.assertEqual(len(res["quota_cycles"]), 1)
+        c = res["quota_cycles"][0]
+        per = orgopt.call_cost_usd(1000, 200, 50, PRICING)
+        self.assertTrue(c["partial"])
+        self.assertAlmostEqual(c["days"], 47 / 24, places=6)
+        self.assertEqual(c["tokens"], 48 * 1050)
+        self.assertAlmostEqual(c["usd"], 48 * per, places=6)
+        # one real gap, but the cycle before it starts at the export boundary (partial),
+        # so quota days are not inferred
+        self.assertIsNone(self.uniform_rep["plan"]["quota"])
+        self.assertIsNone(self.uniform_rep["quota_inferred"])
+        md = advise.memo_md(self.uniform_rep, "en")
+        self.assertIn("partial cycle", md)
+        self.assertNotIn("95% less", md)
+        self.assertIn(f"{c['tokens']:,.0f}", md)
+        self.assertIn(f"${c['usd']:,.2f}", md)
+        self.assertIn(f"{c['days']:.1f}", md)
+
+    def test_gap_shorter_than_max_gap_does_not_change_the_denominator(self):
+        wide = advise.report(self.gap, PRICING, tz=self.tz, quota_days=3, max_gap_hours=1000)
+        self.assertEqual(wide["analysis"]["usage_gaps"], [])
+        self.assertAlmostEqual(wide["analysis"]["active_days"], wide["analysis"]["span_days"])
+        self.assertLess(wide["plan"]["usd_per_week"], self.full_rep["plan"]["usd_per_week"] * 0.75)
+
+    def test_export_without_a_gap_is_unchanged(self):
+        res = self.full_rep["analysis"]
+        self.assertEqual(res["usage_gaps"], [])
+        self.assertEqual(res["quota_cycles"], [])
+        self.assertAlmostEqual(res["active_days"], res["span_days"])
+        md = advise.memo_md(self.full_rep, "en")
+        self.assertNotIn("active days", md)
+        self.assertNotIn("Quota gap", md)
+        self.assertIn("Weekly figures = period × 7 / days.", md)
+        text = advise.trend_md(self.full_rep["trend"], "en")
+        self.assertNotIn("no data", text)
+        self.assertNotIn("active days", text)
+
+    def test_cli_trend_shows_the_gap(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(cli.main(["trend", self.gap, "--tz", "+08:00", "--max-gap", "12"]), 0)
+        self.assertIn("no data", buf.getvalue())
+        self.assertIn("active days", buf.getvalue())
+
+
+def _write_calls(path, stamps):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["timestamp", "bot", "chat_id", "input_tokens", "cached_input_tokens", "output_tokens"])
+        for t in stamps:
+            stamp = t.astimezone(timezone.utc) if t.tzinfo else t
+            w.writerow([stamp.strftime("%Y-%m-%dT%H:%M:%SZ"), "meter", "c1", 1000, 200, 50])
+    return path
+
+
+def _long_silences(path, hours=12):
+    rows, _, _ = analyze_usage.load_rows(path)
+    limit = hours * 3600
+    return [(b["time"] - a["time"]).total_seconds()
+            for a, b in zip(rows, rows[1:])
+            if (b["time"] - a["time"]).total_seconds() > limit]
+
+
+def _office_hours_csv(path, days=14):
+    """Weekday calls every 15 minutes, 09:00–18:00 UTC. Nights are 15 h, weekends 63 h."""
+    start = datetime(2026, 10, 12, tzinfo=timezone.utc)  # Monday
+    stamps = []
+    for d in range(days):
+        day = start + timedelta(days=d)
+        if day.weekday() >= 5:
+            continue
+        for hour in range(9, 19):
+            minutes = (0,) if hour == 18 else (0, 15, 30, 45)
+            for minute in minutes:
+                stamps.append(day.replace(hour=hour, minute=minute))
+    return _write_calls(path, stamps)
+
+
+def _twice_daily_csv(path, days=14):
+    """One call at 09:00 and one at 18:00 every day, including weekends. Nights are 15 h."""
+    start = datetime(2026, 10, 12, tzinfo=timezone.utc)
+    stamps = []
+    for d in range(days):
+        day = start + timedelta(days=d)
+        for hour in (9, 18):
+            stamps.append(day.replace(hour=hour))
+    return _write_calls(path, stamps)
+
+
+class TestScheduledIdleIsNotQuotaGap(unittest.TestCase):
+    """Overnight and weekend quiet match the export's own clock, so they are not exhaustion."""
+
+    def _assert_idle_keeps_the_span_rate(self, path, night=True, weekend=False):
+        silences = _long_silences(path)
+        self.assertTrue(silences)
+        if night:
+            self.assertTrue(any(14 * 3600 <= s <= 16 * 3600 for s in silences))
+        if weekend:
+            self.assertTrue(any(60 * 3600 <= s <= 66 * 3600 for s in silences))
+        rep = advise.report(path, PRICING)
+        res = rep["analysis"]
+        self.assertEqual(res["usage_gaps"], [])
+        self.assertEqual(res["quota_cycles"], [])
+        self.assertAlmostEqual(res["active_days"], res["span_days"])
+        self.assertAlmostEqual(rep["plan"]["usd_per_week"], res["total_usd"] * 7 / res["span_days"], places=6)
+        idle_days = sum(silences) / 86400
+        buggy = res["total_usd"] * 7 / (res["span_days"] - idle_days)
+        self.assertGreater(buggy, rep["plan"]["usd_per_week"] * 1.2)
+        self.assertIsNone(rep["plan"]["quota"])
+        self.assertIsNone(rep["quota_inferred"])
+        md = advise.memo_md(rep, "en")
+        self.assertIn("Quota days are omitted", md)
+        self.assertNotIn("Quota gap", md)
+        self.assertNotIn("0.375", md)
+        self.assertNotIn("95% less", md)
+        self.assertIn("Weekly figures = period × 7 / days.", md)
+
+    def test_weekday_office_hours_nights_and_weekends_are_not_gaps(self):
+        path = _office_hours_csv(os.path.join(tempfile.mkdtemp(), "office.csv"))
+        self._assert_idle_keeps_the_span_rate(path, night=True, weekend=True)
+
+    def test_twice_daily_nights_are_not_gaps(self):
+        path = _twice_daily_csv(os.path.join(tempfile.mkdtemp(), "twice.csv"))
+        self._assert_idle_keeps_the_span_rate(path, night=True, weekend=False)
+
+    def test_complete_cycle_quota_days_are_rounded(self):
+        """Two exhaustion holes close one full cycle; the printed quota days are rounded to 1 decimal."""
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        stamps, t = [], start
+        for hours, pause in ((48, 72), (48, 72), (24, 0)):
+            for _ in range(hours):
+                stamps.append(t)
+                t += timedelta(hours=1)
+            t += timedelta(hours=pause - 1) if pause else timedelta(0)
+        path = _write_calls(os.path.join(tempfile.mkdtemp(), "cycles.csv"), stamps)
+        rep = advise.report(path, PRICING)
+        cycles = rep["analysis"]["quota_cycles"]
+        self.assertEqual(len(rep["analysis"]["usage_gaps"]), 2)
+        self.assertEqual([c["partial"] for c in cycles], [True, False])
+        raw = cycles[1]["days"]
+        self.assertNotEqual(raw, round(raw, 1))
+        self.assertEqual(rep["quota_inferred"]["days"], round(raw, 1))
+        self.assertFalse(rep["quota_inferred"]["partial"])
+        self.assertEqual(rep["plan"]["quota"]["days_now"], round(raw, 1))
+        md = advise.memo_md(rep, "en")
+        self.assertIn(f"Quota days ({round(raw, 1):.1f})", md)
+        self.assertNotIn(f"{raw:.5f}", md)
+
+
+def _zoned_office_csv(path, offset_hours, weekdays, outage=None, days=21):
+    """Calls every 15 min, 09:00–18:45 local, `days` calendar days from Monday 2026-10-05.
+
+    `weekdays` is a set of weekday numbers (Monday is 0). `outage` is a (start, end) pair of
+    local datetimes; calls in that half-open interval are dropped."""
+    tz = timezone(timedelta(hours=offset_hours)) if offset_hours else timezone.utc
+    start = datetime(2026, 10, 5, tzinfo=tz)
+    stamps = []
+    for d in range(days):
+        day = start + timedelta(days=d)
+        if day.weekday() not in weekdays:
+            continue
+        for hour in range(9, 19):
+            for minute in (0, 15, 30, 45):
+                t = day.replace(hour=hour, minute=minute)
+                if outage and outage[0] <= t < outage[1]:
+                    continue
+                stamps.append(t)
+    return _write_calls(path, stamps)
+
+
+def _two_date_hole_csv(path):
+    """8 h of calls, a 34 h hole, then 4 h. Rows fall on two dates."""
+    start = datetime(2026, 10, 5, 8, 0, tzinfo=timezone.utc)
+    stamps = []
+    t = start
+    end = start + timedelta(hours=8)
+    while t < end:
+        stamps.append(t)
+        t += timedelta(minutes=15)
+    t = end + timedelta(hours=34)
+    end = t + timedelta(hours=4)
+    while t < end:
+        stamps.append(t)
+        t += timedelta(minutes=15)
+    return _write_calls(path, stamps)
+
+
+REST_UNJUDGED_EN = (
+    "Rest days were not judged: the export has fewer than two full weeks, "
+    "so only silences that start or end inside busy hours count as quota gaps."
+)
+REST_UNJUDGED_ZH = "未判斷休息日：資料不到兩個完整週，只有在忙碌時段內開始或結束的靜默才算額度缺口。"
+
+
+class TestLocalClockGaps(unittest.TestCase):
+    """Quota gaps use --tz, or the quiet-point frame when it is omitted. t1–t14."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        mon_fri = {0, 1, 2, 3, 4}
+        mon_sat = {0, 1, 2, 3, 4, 5}
+        mon_thu = {0, 1, 2, 3}
+        cls.t1 = _zoned_office_csv(os.path.join(cls.tmp, "t1.csv"), -7, mon_fri)
+        cls.t2 = _zoned_office_csv(os.path.join(cls.tmp, "t2.csv"), 10, mon_fri)
+        cls.t3 = _zoned_office_csv(os.path.join(cls.tmp, "t3.csv"), 0, mon_sat)
+        cls.t4 = _zoned_office_csv(os.path.join(cls.tmp, "t4.csv"), 0, mon_thu)
+        cls.t5_sun = _zoned_office_csv(os.path.join(cls.tmp, "t5sun.csv"), -7, mon_sat)
+        cls.t5_fri = _zoned_office_csv(os.path.join(cls.tmp, "t5fri.csv"), 10, mon_thu)
+        cls.t6 = _office_hours_csv(os.path.join(cls.tmp, "t6.csv"))
+        cls.full = make_grok_export.generate(os.path.join(cls.tmp, "full.csv"))
+        cls.issue4 = _drop_window(cls.full, os.path.join(cls.tmp, "issue4.csv"), GROK_START, 2.5, 5.5)
+        cls.t9 = {}
+        for hours in (-7, 0, 8, 10):
+            tz = timezone(timedelta(hours=hours)) if hours else timezone.utc
+            outage = (datetime(2026, 10, 13, 13, 0, tzinfo=tz), datetime(2026, 10, 15, 12, 0, tzinfo=tz))
+            cls.t9[hours] = _zoned_office_csv(os.path.join(cls.tmp, f"t9_{hours}.csv"), hours, mon_fri, outage)
+        cls.t10 = _two_date_hole_csv(os.path.join(cls.tmp, "t10.csv"))
+        cls.t11 = _zoned_office_csv(os.path.join(cls.tmp, "t11.csv"), -7, {1, 3, 5, 6})
+        cls.t12 = _zoned_office_csv(os.path.join(cls.tmp, "t12.csv"), 10, {0, 2, 4, 5, 6})
+        t13_tz = timezone(timedelta(hours=-7))
+        t13_outage = (datetime(2026, 10, 14, 0, 0, tzinfo=t13_tz), datetime(2026, 10, 15, 12, 0, tzinfo=t13_tz))
+        cls.t13 = _zoned_office_csv(os.path.join(cls.tmp, "t13.csv"), -7, mon_fri, t13_outage)
+
+    def _assert_scheduled_idle(self, path, tz):
+        """Matching tz and no tz: no gaps, span rate, no inferred quota."""
+        weeks = []
+        for chosen in (tz, None):
+            rep = advise.report(path, PRICING, **({} if chosen is None else {"tz": chosen}))
+            res = rep["analysis"]
+            self.assertEqual(res["usage_gaps"], [])
+            self.assertEqual(res["quota_cycles"], [])
+            self.assertAlmostEqual(res["active_days"], res["span_days"])
+            self.assertAlmostEqual(rep["plan"]["usd_per_week"], res["total_usd"] * 7 / res["span_days"], places=6)
+            self.assertIsNone(rep["quota_inferred"])
+            self.assertIsNone(rep["plan"]["quota"])
+            self.assertNotIn("quota lasts", advise.memo_md(rep, "en"))
+            weeks.append(rep["plan"]["usd_per_week"])
+        self.assertAlmostEqual(weeks[0], weeks[1], places=6)
+
+    def _frame_hours(self, path):
+        rows, _, _ = analyze_usage.load_rows(path)
+        frame = analyze_usage._quiet_point_tz(rows)
+        _, rest = analyze_usage._activity_clock(rows, frame)
+        return int(frame.utcoffset(None).total_seconds() // 3600), rest
+
+    def test_t1_utc_minus_7_weekday_office_is_not_a_gap(self):
+        self._assert_scheduled_idle(self.t1, timezone(timedelta(hours=-7)))
+        self.assertEqual(self._frame_hours(self.t1), (-9, {5, 6}))
+
+    def test_t2_utc_plus_10_weekday_office_is_not_a_gap(self):
+        self._assert_scheduled_idle(self.t2, timezone(timedelta(hours=10)))
+        self.assertEqual(self._frame_hours(self.t2), (8, {5, 6}))
+
+    def test_t3_sunday_only_rest_is_not_a_gap(self):
+        self._assert_scheduled_idle(self.t3, timezone.utc)
+        self.assertEqual(self._frame_hours(self.t3)[1], {6})
+
+    def test_t4_friday_to_sunday_rest_is_not_a_gap(self):
+        self._assert_scheduled_idle(self.t4, timezone.utc)
+        self.assertEqual(self._frame_hours(self.t4)[1], {4, 5, 6})
+
+    def test_t5_shifted_sunday_and_long_weekend_are_not_gaps(self):
+        self._assert_scheduled_idle(self.t5_sun, timezone(timedelta(hours=-7)))
+        self._assert_scheduled_idle(self.t5_fri, timezone(timedelta(hours=10)))
+        self.assertEqual(self._frame_hours(self.t5_sun), (-9, {6}))
+        self.assertEqual(self._frame_hours(self.t5_fri), (8, {4, 5, 6}))
+
+    def test_t6_utc_office_hours_rate_is_unchanged(self):
+        rep = advise.report(self.t6, PRICING)
+        res = rep["analysis"]
+        self.assertEqual(res["usage_gaps"], [])
+        self.assertAlmostEqual(rep["plan"]["usd_per_week"], 0.455385, places=6)
+        self.assertAlmostEqual(rep["plan"]["usd_per_week"], res["total_usd"] * 7 / res["span_days"], places=6)
+        self.assertIsNone(rep["quota_inferred"])
+        self.assertIsNone(rep["plan"]["quota"])
+        self.assertNotIn("quota lasts", advise.memo_md(rep, "en"))
+
+    def test_t7_issue4_with_quota_days_is_unchanged(self):
+        full = advise.report(self.full, PRICING, tz=advise.parse_tz("+08:00"), quota_days=3)
+        self.assertAlmostEqual(full["plan"]["usd_per_week"], 158.29, places=2)
+        for chosen in (advise.parse_tz("+08:00"), None):
+            rep = advise.report(self.issue4, PRICING, quota_days=3, **({} if chosen is None else {"tz": chosen}))
+            res = rep["analysis"]
+            self.assertEqual(len(res["usage_gaps"]), 1)
+            self.assertAlmostEqual(res["usage_gaps"][0]["days"], 3.01, places=2)
+            self.assertAlmostEqual(rep["plan"]["usd_per_week"], 157.66, places=2)
+            self.assertAlmostEqual(rep["plan"]["usd_per_week"], full["plan"]["usd_per_week"],
+                                   delta=0.05 * full["plan"]["usd_per_week"])
+            self.assertEqual(rep["plan"]["quota"]["days_now"], 3)
+            self.assertIsNone(rep["quota_inferred"])
+
+    def test_t8_issue4_partial_cycle_infers_no_quota(self):
+        for chosen in (advise.parse_tz("+08:00"), None):
+            rep = advise.report(self.issue4, PRICING, **({} if chosen is None else {"tz": chosen}))
+            res = rep["analysis"]
+            self.assertEqual(len(res["usage_gaps"]), 1)
+            self.assertEqual([c["partial"] for c in res["quota_cycles"]], [True])
+            self.assertIsNone(rep["plan"]["quota"])
+            self.assertIsNone(rep["quota_inferred"])
+            self.assertNotIn("quota lasts", advise.memo_md(rep, "en"))
+
+    def test_t9_midweek_outage_is_one_gap_in_every_zone(self):
+        for hours, path in self.t9.items():
+            tz = timezone(timedelta(hours=hours)) if hours else timezone.utc
+            for chosen in (tz, None):
+                rep = advise.report(path, PRICING, **({} if chosen is None else {"tz": chosen}))
+                res = rep["analysis"]
+                self.assertEqual(len(res["usage_gaps"]), 1, (hours, chosen))
+                gap = res["usage_gaps"][0]
+                self.assertAlmostEqual(gap["days"], 1.97, places=2, msg=(hours, chosen))
+                self.assertAlmostEqual(rep["plan"]["usd_per_week"],
+                                       res["total_usd"] * 7 / (res["span_days"] - gap["days"]), places=6)
+                self.assertEqual([c["partial"] for c in res["quota_cycles"]], [True])
+                self.assertIsNone(rep["plan"]["quota"])
+                self.assertIsNone(rep["quota_inferred"])
+
+    def test_t10_two_dates_yield_no_gap(self):
+        rows, _, _ = analyze_usage.load_rows(self.t10)
+        self.assertEqual(len({r["time"].date() for r in rows}), 2)
+        self.assertTrue(any(s > 12 * 3600 for s in _long_silences(self.t10)))
+        rep = advise.report(self.t10, PRICING)
+        self.assertEqual(rep["analysis"]["usage_gaps"], [])
+        self.assertIsNone(rep["plan"]["quota"])
+        self.assertIsNone(rep["quota_inferred"])
+
+    def test_t11_split_monday_wednesday_friday_rest_is_not_a_gap(self):
+        self._assert_scheduled_idle(self.t11, timezone(timedelta(hours=-7)))
+        self.assertEqual(self._frame_hours(self.t11), (-9, {0, 2, 4}))
+
+    def test_t12_split_tuesday_thursday_rest_is_not_a_gap(self):
+        self._assert_scheduled_idle(self.t12, timezone(timedelta(hours=10)))
+        self.assertEqual(self._frame_hours(self.t12), (8, {1, 3}))
+
+    def test_t13_midweek_quota_gap_stays_one_gap(self):
+        for chosen in (timezone(timedelta(hours=-7)), None):
+            rep = advise.report(self.t13, PRICING, **({} if chosen is None else {"tz": chosen}))
+            res = rep["analysis"]
+            self.assertEqual(len(res["usage_gaps"]), 1, chosen)
+            gap = res["usage_gaps"][0]
+            self.assertAlmostEqual(gap["days"], 1.72, places=2, msg=chosen)
+            self.assertAlmostEqual(rep["plan"]["usd_per_week"],
+                                   res["total_usd"] * 7 / (res["span_days"] - gap["days"]), places=6)
+            self.assertEqual([c["partial"] for c in res["quota_cycles"]], [True])
+            self.assertIsNone(rep["plan"]["quota"])
+            self.assertIsNone(rep["quota_inferred"])
+            self.assertTrue(res["rest_days_judged"])
+            self.assertNotIn(REST_UNJUDGED_EN, advise.memo_md(rep, "en"))
+
+    def test_t14_under_two_weeks_warns_and_keeps_the_issue4_gap(self):
+        for chosen in (advise.parse_tz("+08:00"), None):
+            rep = advise.report(self.issue4, PRICING, **({} if chosen is None else {"tz": chosen}))
+            res = rep["analysis"]
+            self.assertFalse(res["rest_days_judged"], chosen)
+            self.assertEqual(len(res["usage_gaps"]), 1, chosen)
+            self.assertAlmostEqual(res["usage_gaps"][0]["days"], 3.01, places=2, msg=chosen)
+            self.assertIn(REST_UNJUDGED_EN, advise.memo_md(rep, "en"))
+            self.assertIn(REST_UNJUDGED_ZH, advise.memo_md(rep, "zh-TW"))
+        for chosen in (timezone(timedelta(hours=-7)), None):
+            rep = advise.report(self.t11, PRICING, **({} if chosen is None else {"tz": chosen}))
+            self.assertTrue(rep["analysis"]["rest_days_judged"], chosen)
+            self.assertNotIn(REST_UNJUDGED_EN, advise.memo_md(rep, "en"))
+            self.assertNotIn(REST_UNJUDGED_ZH, advise.memo_md(rep, "zh-TW"))
+
+    def test_report_and_trend_tz_defaults_to_unset(self):
+        parser = cli.build_parser()
+        self.assertIsNone(parser.parse_args(["report", "x.csv"]).tz)
+        self.assertIsNone(parser.parse_args(["trend", "x.csv"]).tz)
+        self.assertEqual(parser.parse_args(["report", "x.csv", "--tz", "+10:00"]).tz, "+10:00")
 
 
 if __name__ == "__main__":

@@ -123,7 +123,7 @@ If nothing changes, the instructions were probably rewritten or are an old versi
 
 ## Step 4: first real use
 
-1. Export the **usage events** CSV from Grok Bot's usage page (the columns start with `Date, Cloud Agent ID, Automation ID, …`; the menu names may differ slightly). The **last 7 days** works best; with less than 2 days, trends are unreliable.
+1. Export the **usage events** CSV from Grok Bot's usage page (the columns start with `Date, Cloud Agent ID, Automation ID, …`; the menu names may differ slightly). The **last 7 days** works best; with less than 2 days, trends are unreliable. When you export, note the quota percentage shown on the usage page and the reset time, and include both with the file.
 2. Open a **new chat** with the Token Advisor, attach the file and paste this (fill in the blanks, delete what you don't know):
 
    ```text
