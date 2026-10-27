@@ -42,6 +42,8 @@ ACK_OUTPUT = 30             # same threshold as analyze_usage's acknowledgement 
 IDLE_OUTPUT = 80            # a single-call wake-up writing at most this much found nothing to do
 MATCH_EARLY = 60            # a scheduled wake-up may start this many seconds before the fire time ...
 MATCH_WINDOW = 300          # ... or up to this many seconds after it
+EVENT_EARLY = 0             # an event-triggered wake-up starts this many seconds before the logged event ...
+EVENT_WINDOW = 30           # ... through this many seconds after it (default 0–30 s)
 BOARD_MIN_READS = 10       # read-then-work wake-ups needed before judging a board's size
 BOARD_BIG = 4000            # a fetch this large (median) means a whole board, not a section, is read
 BOARD_SECTION = 2000        # what reading only the needed section usually brings in
@@ -257,14 +259,68 @@ def wake_stats(wakes, pricing, has_cost, rate_days):
             "long_premium_usd": sum(analyze_usage.cost_parts(r, pricing)[3] for r in rows)}
 
 
+class EventError(ValueError):
+    """An events file could not be read. One line is `timestamp<TAB>source`."""
+
+
+def load_events(path):
+    with open(path, encoding="utf-8-sig") as f:
+        return parse_events(f.read())
+
+
+def parse_events(text):
+    """Lines of `timestamp<TAB>source`. Blank lines and full-line comments are ignored.
+
+    The source is everything after the first tab, unchanged. Spaces stay.
+    An empty or whitespace-only source is an error that names the line.
+    """
+    out, errors = [], []
+    for i, raw in enumerate(text.splitlines(), 1):
+        blank = raw.strip()
+        if not blank or blank.startswith("#"):
+            continue
+        if "\t" not in raw:
+            errors.append(f"line {i}: expected timestamp<TAB>source")
+            continue
+        ts, source = raw.split("\t", 1)
+        if not source.strip():
+            errors.append(f"line {i}: missing source")
+            continue
+        try:
+            when = analyze_usage.parse_time(ts.strip())
+        except ValueError as e:
+            errors.append(f"line {i}: {e}")
+            continue
+        out.append({"time": when, "source": source})
+    if errors:
+        raise EventError("; ".join(errors))
+    return out
+
+
+def _match_chance(free, span_s, early, window, n_fires):
+    """Expected accidental matches if the unmatched wake-ups were spread uniformly."""
+    return free / span_s * (early + window) * n_fires
+
+
 def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=120,
-              early=MATCH_EARLY, window=MATCH_WINDOW):
-    """Give wake-ups to the bots whose schedule fired just before them (one wake-up per fire, nearest
-    first). What is left in a bucket is unscheduled: the user's messages and bot-to-bot pings."""
+              early=MATCH_EARLY, window=MATCH_WINDOW, events=None,
+              event_early=EVENT_EARLY, event_window=EVENT_WINDOW):
+    """Give each wake-up to the nearest schedule fire or logged event (one wake-up per fire).
+
+    A schedule matches from `early` seconds before the fire to `window` seconds after it.
+    An event matches from `event_early` to `event_window` seconds after its timestamp
+    (default 0–30 s). A tie goes to the name that sorts first, the same rule schedule
+    fires already use. What nothing claims stays unattributed. An event source that
+    fails the chance check still keeps the wake-ups it matched and is marked not
+    reliable. The remainder mixes the user's messages, bot-to-bot pings and
+    event-triggered automations, and this function does not say which.
+    """
     wakes = _wakes(rows, gap)
     starts = [w["start"] for w in wakes]
     t0, t1 = rows[0]["time"], rows[-1]["time"]
     rate_days = _rate_days(res)
+    specs = list(specs or [])
+    events = list(events or [])
     fires, pairs = {}, []
     for sp in specs:
         fires[sp["name"]] = schedules.fire_times(sp, t0 - timedelta(seconds=window), t1, tz)
@@ -274,30 +330,65 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
             for i in range(lo, hi):
                 if sp["in"] and wakes[i]["unit"] != sp["in"]:
                     continue
-                pairs.append((abs((starts[i] - f).total_seconds()), sp["name"], f, i))
+                dist = abs((starts[i] - f).total_seconds())
+                pairs.append((dist, sp["name"], ("sched", sp["name"], f), i))
+    by_source = {}
+    for ev in events:
+        by_source.setdefault(ev["source"], []).append(ev["time"])
+    for source, times in by_source.items():
+        times = sorted(times)
+        by_source[source] = times
+        for j, f in enumerate(times):
+            lo = bisect.bisect_left(starts, f - timedelta(seconds=event_early))
+            hi = bisect.bisect_right(starts, f + timedelta(seconds=event_window))
+            for i in range(lo, hi):
+                dist = abs((starts[i] - f).total_seconds())
+                pairs.append((dist, source, ("event", source, j), i))
     pairs.sort(key=lambda p: (p[0], p[1]))
-    taken_w, taken_f, got = set(), set(), {sp["name"]: [] for sp in specs}
-    for _, name, f, i in pairs:
-        if i in taken_w or (name, f) in taken_f:
+    taken_w, taken_f = set(), set()
+    got = {sp["name"]: [] for sp in specs}
+    got_event = {source: [] for source in by_source}
+    for _, _, key, i in pairs:
+        kind, name, _fire = key
+        if i in taken_w or key in taken_f:
             continue
         taken_w.add(i)
-        taken_f.add((name, f))
-        got[name].append(i)
+        taken_f.add(key)
+        (got_event if kind == "event" else got)[name].append(i)
     span_s = max((t1 - t0).total_seconds(), 1.0)
+
+    def reliable(n, chance):
+        return n >= 5 and n >= 3 * chance
+
     bots = []
     for sp in specs:
         eligible = [i for i, w in enumerate(wakes) if not sp["in"] or w["unit"] == sp["in"]]
         free = sum(1 for i in eligible if i not in taken_w)
-        chance = free / span_s * (early + window) * len(fires[sp["name"]])
+        n_fires = len(fires[sp["name"]])
+        chance = _match_chance(free, span_s, early, window, n_fires)
         st = wake_stats([wakes[i] for i in got[sp["name"]]], pricing, has_cost, rate_days)
         n = len(got[sp["name"]])
         bots.append({"name": sp["name"], "schedule": sp["text"], "spec": sp,
-                     "interval_min": schedules.interval_minutes(sp), "fires": len(fires[sp["name"]]),
-                     "matched": n, "match_rate": n / len(fires[sp["name"]]) if fires[sp["name"]] else 0.0,
-                     "chance_matches": chance, "reliable": n >= 5 and n >= 3 * chance,
+                     "interval_min": schedules.interval_minutes(sp), "fires": n_fires,
+                     "matched": n, "match_rate": n / n_fires if n_fires else 0.0,
+                     "chance_matches": chance, "reliable": reliable(n, chance),
                      "units": sorted({wakes[i]["unit"] for i in got[sp["name"]]}), "stats": st})
     bots.sort(key=lambda b: -(b["stats"]["usd"] if b["stats"] else 0))
+    event_rows = []
+    for source, times in by_source.items():
+        # All wake-ups eligible before matching. The count left afterwards is ~0
+        # when the log is dense, which forces chance to 0 and marks the source reliable.
+        chance = _match_chance(len(wakes), span_s, event_early, event_window, len(times))
+        claimed = got_event[source]
+        n = len(claimed)
+        st = wake_stats([wakes[i] for i in claimed], pricing, has_cost, rate_days)
+        event_rows.append({"name": source, "fires": len(times), "matched": n,
+                           "match_rate": n / len(times) if times else 0.0,
+                           "chance_matches": chance, "reliable": reliable(n, chance),
+                           "units": sorted({wakes[i]["unit"] for i in claimed}), "stats": st})
+    event_rows.sort(key=lambda e: -(e["stats"]["usd"] if e["stats"] else 0))
     touched = {u for b in bots for u in b["units"]}
+    touched.update(u for e in event_rows for u in e["units"])
     remainder = []
     for unit in sorted(touched):
         rest = [w for i, w in enumerate(wakes) if w["unit"] == unit and i not in taken_w]
@@ -307,11 +398,14 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
     total = res["total_usd"] or 1.0
     for b in bots:
         b["share"] = b["stats"]["usd"] / total if b["stats"] else 0.0
+    for e in event_rows:
+        e["share"] = e["stats"]["usd"] / total if e["stats"] else 0.0
     for r in remainder:
         r["share"] = r["stats"]["usd"] / total
-    return {"bots": bots, "remainder": remainder, "touched_units": sorted(touched),
+    return {"bots": bots, "events": event_rows, "remainder": remainder, "touched_units": sorted(touched),
             "window_s": window, "early_s": early,
-            "matched_share": sum(b["share"] for b in bots)}
+            "event_window_s": event_window, "event_early_s": event_early,
+            "matched_share": sum(b["share"] for b in bots) + sum(e["share"] for e in event_rows if e["reliable"])}
 
 
 # ---------------------------------------------------------------- data gaps
@@ -425,9 +519,18 @@ def handover_sweep(ents, pricing, freq_ratio=None, fixed=None, cap=MAX_HANDOVERS
     return sweep, picks, blocked
 
 
+def _named_in_cut(entity):
+    """Whether this driver may be named in a hotspot, decide-hot, or goal-cut line.
+
+    An unreliable event source keeps the wake-ups it matched. A dense log can still
+    take them from a schedule or a real source, so that source is not the cut.
+    """
+    return not (entity.get("kind") == "event" and not entity.get("reliable", True))
+
+
 def _entities(res, att, lang="en"):
-    """The contexts to advise on: each unit, except that a bucket split by schedules is replaced by
-    its scheduled bots plus what is left (unscheduled traffic)."""
+    """The contexts to advise on: each unit, except that a bucket split by schedules or events is
+    replaced by its scheduled bots, its event sources, and what is left (unattributed traffic)."""
     touched = set(att["touched_units"]) if att else set()
     keys = ("C_p50", "wakes_per_day", "rounds_per_wake", "cache_hit", "wakes", "usd", "short_wakes",
             "read_first_wakes", "fetch_p50", "fetch_p90", "fetch_trend")
@@ -452,6 +555,13 @@ def _entities(res, att, lang="en"):
         if st:
             ents.append(dict({k: st[k] for k in keys}, name=b["name"], unit=b["units"][0], share=b["share"],
                              kind="bot", sawtooth=False, bot=b,
+                             growth_week=growth_week(st["growth_per_wake"], st["wakes_per_day"],
+                                                     st["series_growth_per_day"])))
+    for ev in (att or {}).get("events") or []:
+        st = ev["stats"]
+        if st:
+            ents.append(dict({k: st[k] for k in keys}, name=ev["name"], unit=ev["units"][0], share=ev["share"],
+                             kind="event", reliable=ev["reliable"], sawtooth=False,
                              growth_week=growth_week(st["growth_per_wake"], st["wakes_per_day"],
                                                      st["series_growth_per_day"])))
     for r in (att or {}).get("remainder", []):
@@ -561,9 +671,13 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
             named = [e["name"] for e, _, _ in big if e["kind"] in ("bot", "context")]
             if any(e["kind"] in ("bucket", "remainder") for e, _, _ in big):
                 named.append(t("p.req.board_readers", lang))
-            a["request"] = [t("p.board_trim.req_read", lang, names=sep_.join(named)),
-                            t("p.board_trim.req_keep", lang, sec=f"{BOARD_SECTION:,.0f}",
-                              cap=f"{BOARD_CAP:,.0f}")]
+            # event sources are not named; skip the read line when nothing is left to name
+            reqs = []
+            if named:
+                reqs.append(t("p.board_trim.req_read", lang, names=sep_.join(named)))
+            reqs.append(t("p.board_trim.req_keep", lang, sec=f"{BOARD_SECTION:,.0f}",
+                          cap=f"{BOARD_CAP:,.0f}"))
+            a["request"] = reqs
             a["per_unit"] = [{"unit": e["name"], "fetch_p50": e["fetch_p50"], "section": sec,
                               "usd_week": o["saving_section_usd_week"]} for e, o, sec in big]
             # a smaller board also slows the context's growth, so the hand-overs below are priced on it
@@ -609,8 +723,9 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
                 named = [p["name"] for p in group if p["entity"]["kind"] in ("bot", "context")]
                 if any(p["entity"]["kind"] in ("bucket", "remainder") for p in group):
                     named.append(t("p.req.others", lang))
-                reqs.append(t("p.handover.req", lang, names=sep_.join(named), at=f"{at:,.0f}"))
-            a["request"] = reqs
+                if named:
+                    reqs.append(t("p.handover.req", lang, names=sep_.join(named), at=f"{at:,.0f}"))
+            a["request"] = reqs or None
             for x in absorbed:
                 actions.remove(x)
     plan_handover = {"sweep": sweep, "picks": picks, "blocked": blocked, "max_per_week": max_handovers_week,
@@ -640,9 +755,10 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
                              at=f"{handover_at or max(HANDOVER_THRESHOLDS):,.0f}")
 
     # the biggest remaining driver (bots whose schedule is already being changed are set aside): a named
-    # bot gets a judgment-tier action; a bucket that still mixes several bots, or unscheduled traffic,
-    # is the next analysis step, not something to hand back to the client
-    rest = [e for e in ents if e["name"] not in freq_bots]
+    # bot gets a judgment-tier action; a bucket that still mixes several bots is the next analysis step.
+    # Unattributed traffic never becomes a pause or a frequency change: the only action is to confirm
+    # the owner and the trigger first.
+    rest = [e for e in ents if e["name"] not in freq_bots and _named_in_cut(e)]
     top = rest[0] if rest else None
     analysis_next = None
     if top and top["kind"] == "bucket" and top["share"] >= SPLIT_SHARE:
@@ -650,7 +766,7 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
     elif top and top["kind"] == "remainder" and top["share"] >= SPLIT_SHARE:
         analysis_next = {"kind": "split_remainder", "unit": top["unit"], "share": top["share"],
                          "usd_week": top["usd"] * wk}
-    elif top and top["share"] >= HOTSPOT_SHARE:
+    elif top and top["kind"] != "remainder" and top["share"] >= HOTSPOT_SHARE:
         x = top["usd"] * wk
         ch = next((c for c in tr["changes"] if c["unit"] == top["name"]), None) if tr else None
         chg = ""
@@ -658,6 +774,15 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
             chg = t("p.hotspot.chg", lang, a=ch["wakes_day_before"], b=ch["wakes_day_after"])
         add("hotspot", top["name"], 0.1 * x, 0.3 * x, "low", "medium", "judgment",
             p=top["share"], w=top["wakes_per_day"], per=top["usd"] / top["wakes"], chg=chg)
+
+    if analysis_next and analysis_next["kind"] == "split_remainder":
+        actions.append({"code": "confirm_owner", "unit": analysis_next["unit"],
+                        "usd_week_low": 0.0, "usd_week_high": 0.0,
+                        "confidence": "low", "effort": "medium", "tier": "judgment",
+                        "title": t("p.confirm_owner", lang, unit=analysis_next["unit"]),
+                        "why": t("p.confirm_owner.why", lang, unit=analysis_next["unit"],
+                                 p=analysis_next["share"], usd=analysis_next["usd_week"]),
+                        "how": t("p.confirm_owner.how", lang), "request": None})
 
     for a in actions:
         mid = (a["usd_week_low"] + a["usd_week_high"]) / 2
@@ -676,9 +801,10 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
         need = week_usd - goal_usd_week
         goal = {"target": goal_usd_week, "need": need, "met": need <= 0, "reachable": need <= lo,
                 "remaining": max(0.0, need - lo)}
-        if top and goal["remaining"] > 0 and top["usd"] > 0:
-            goal["hotspot_cut"] = goal["remaining"] / (top["usd"] * wk)
-            goal["hotspot_unit"] = top["name"]
+        driver = top if top and top.get("kind") != "remainder" else None
+        if driver and goal["remaining"] > 0 and driver["usd"] > 0:
+            goal["hotspot_cut"] = goal["remaining"] / (driver["usd"] * wk)
+            goal["hotspot_unit"] = driver["name"]
 
     # overall confidence
     sev = {g["severity"] for g in gap_list}
@@ -749,8 +875,9 @@ def _infer_quota_days(cycles):
 def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, goal_usd_week=None,
            tz=None, handover_at=None, schedule_specs=None, lang="en",
            max_handovers_week=MAX_HANDOVERS_WEEK, quota_days=None, target_days=7,
-           max_gap_hours=None):
-    """Everything the memo needs. `schedule_specs` (from schedules.load) splits buckets into bots.
+           max_gap_hours=None, events=None):
+    """Everything the memo needs. `schedule_specs` (from schedules.load) and `events` (from load_events)
+    split buckets into scheduled bots and event sources.
 
     `tz` None displays days in UTC and judges quota gaps on the quiet-point frame. A tz value
     is the clock for both."""
@@ -767,11 +894,20 @@ def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, go
         u["from_model"] = u["unit"] in from_model
     tr = trend(rows, pricing, "cost" in mapping, tz, max_gap_hours)
     gl = gaps(res, mapping, info, lang)
-    att = attribute(rows, res, schedule_specs, pricing, "cost" in mapping, display_tz, gap) if schedule_specs else None
+    att = (attribute(rows, res, schedule_specs, pricing, "cost" in mapping, display_tz, gap, events=events)
+           if schedule_specs or events else None)
     if att:
         for g in gl:
             if g["code"] in ("bot_empty", "no_bot"):
-                g["detail"] += t("g.att", lang, p=att["matched_share"], n=sum(1 for b in att["bots"] if b["stats"]))
+                sched_share = sum(b["share"] for b in att["bots"])
+                if att["bots"]:
+                    g["detail"] += t("g.att", lang, p=sched_share, n=sum(1 for b in att["bots"] if b["stats"]))
+                if att.get("events"):
+                    reliable_events = [e for e in att["events"] if e["reliable"]]
+                    ev_n = sum(1 for e in reliable_events if e["stats"])
+                    if ev_n:
+                        g["detail"] += t("g.att_events", lang,
+                                         p=sum(e["share"] for e in reliable_events), n=ev_n)
                 if att["matched_share"] >= 0.3 and g["severity"] == "high":
                     g["severity"] = "medium"
     inferred = None
@@ -905,8 +1041,9 @@ def memo_md(rep, lang="en"):
         L.append(f"| {t('m.others', lang, n=len(rest))} | {_usd(usd * wk)} | {sum(u['share'] for u in rest):.0%} | "
                  f"{sum(u['wakes_per_day'] for u in rest):.1f} | | |")
     att = rep.get("attribution")
-    if att and att["bots"]:
-        L += ["", f"### {t('m.inside', lang, units=', '.join(att['touched_units']))}", "",
+    if att and (att["bots"] or att.get("events")):
+        who = ", ".join(att["touched_units"]) or "-"
+        L += ["", f"### {t('m.inside', lang, units=who)}", "",
               t("m.inside_header", lang), "|---|---|---|---|---|---|---|---|"]
         for b in att["bots"]:
             st = b["stats"]
@@ -915,14 +1052,29 @@ def memo_md(rep, lang="en"):
                 continue
             L.append(f"| {b['name']} | `{b['schedule']}` | {b['matched']} / {b['fires']} | {_usd(st['usd_week'])} | "
                      f"{b['share']:.0%} | ${st['per_wake']:,.3f} | {st['C_p50']:,.0f} | {st['idle_share']:.0%} |")
+        for ev in att.get("events") or []:
+            st = ev["stats"]
+            label = t("m.event", lang)
+            if not st:
+                L.append(f"| {ev['name']} | {label} | {ev['matched']} / {ev['fires']} | | | | | |")
+                continue
+            L.append(f"| {ev['name']} | {label} | {ev['matched']} / {ev['fires']} | {_usd(st['usd_week'])} | "
+                     f"{ev['share']:.0%} | ${st['per_wake']:,.3f} | {st['C_p50']:,.0f} | {st['idle_share']:.0%} |")
         for r in att["remainder"]:
             st = r["stats"]
             L.append(f"| {t('p.other', lang, unit=r['unit'])} | {t('m.unscheduled', lang)} | {st['wakes']} | "
                      f"{_usd(st['usd_week'])} | {r['share']:.0%} | ${st['per_wake']:,.3f} | {st['C_p50']:,.0f} | "
                      f"{st['idle_share']:.0%} |")
         weak = [b["name"] for b in att["bots"] if not b["reliable"]]
-        L += ["", t("m.inside_note", lang, w=att["window_s"] // 60, idle=IDLE_OUTPUT)
-              + (t("m.inside_weak", lang, bots=", ".join(weak)) if weak else "")]
+        weak_ev = [e["name"] for e in (att.get("events") or []) if not e["reliable"]]
+        note = t("m.inside_note", lang, w=att["window_s"] // 60, idle=IDLE_OUTPUT)
+        if att.get("events"):
+            note += t("m.inside_events", lang, w=att["event_window_s"])
+        if weak:
+            note += t("m.inside_weak", lang, bots=", ".join(weak))
+        if weak_ev:
+            note += t("m.inside_weak_events", lang, sources=", ".join(weak_ev))
+        L += ["", note]
     priced = an["uncached_input_usd"] + an["cached_input_usd"] + an["output_usd"] or 1
     L += ["", f"### {t('m.anatomy', lang)}", "", t("m.an_header", lang), "|---|---|---|---|"]
     for key, label in (("uncached_input_usd", "m.an_unc"), ("cached_input_usd", "m.an_cached"),
@@ -950,8 +1102,12 @@ def memo_md(rep, lang="en"):
     if pl["actions"]:
         L += [t("m.recs_note", lang), "", t("m.rec_header", lang), "|---|---|---|---|---|---|---|"]
         for i, a in enumerate(pl["actions"], 1):
-            rng = _usd(a["usd_week_low"]) if abs(a["usd_week_high"] - a["usd_week_low"]) < 0.005 else \
-                f"{_usd(a['usd_week_low'])}–{_usd(a['usd_week_high'])}"
+            if a["usd_week_low"] == 0 and a["usd_week_high"] == 0:
+                rng = "—"
+            elif abs(a["usd_week_high"] - a["usd_week_low"]) < 0.005:
+                rng = _usd(a["usd_week_low"])
+            else:
+                rng = f"{_usd(a['usd_week_low'])}–{_usd(a['usd_week_high'])}"
             tier = f"（{t('m.tier.' + a['tier'], lang)}）" if zh else f" ({t('m.tier.' + a['tier'], lang)})"
             L.append(f"| {i} | **{a['title']}** | {a['why']} | {rng}{tier} | "
                      f"{t('m.lvl.' + a['confidence'], lang)} | {t('m.lvl.' + a['effort'], lang)} | {t('m.owner', lang)} |")
@@ -983,7 +1139,7 @@ def memo_md(rep, lang="en"):
     dec = []
     nxt = pl.get("analysis_next")
     freq = {a["unit"] for a in pl["actions"] if a["code"] == "frequency"}
-    top = next((e for e in pl["entities"] if e["name"] not in freq), None)
+    top = next((e for e in pl["entities"] if e["name"] not in freq and _named_in_cut(e)), None)
     if nxt and nxt["kind"] == "split_bucket":
         dec.append(t("m.split_bucket", lang, unit=nxt["unit"], p=nxt["share"]))
     elif nxt and nxt["kind"] == "split_remainder":
@@ -1037,6 +1193,8 @@ def memo_md(rep, lang="en"):
           "- " + t("m.ap_calib", lang, m=c["model_usd"], a=c["actual_usd"], err=c["error"]),
           "- " + t("m.ap_wake", lang, gap=rep["gap_seconds"]),
           *(["- " + t("m.ap_match", lang, early=att["early_s"], w=att["window_s"], idle=IDLE_OUTPUT)] if att else []),
+          *(["- " + t("m.ap_events", lang, early=att["event_early_s"], w=att["event_window_s"])]
+            if att and att.get("events") else []),
           "- " + t("m.ap_map", lang, m=", ".join(f"{k}={v}" for k, v in res["column_mapping"].items())),
           "- " + t("m.ap_detail", lang)]
     return "\n".join(L) + "\n"

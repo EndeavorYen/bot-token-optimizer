@@ -34,7 +34,7 @@ python3 core/cli.py report usage-events.csv --platform grok-bot --tz +08:00 --qu
     --schedules schedules.txt --out memo.md --lang zh-TW
 ```
 
-`schedules.txt` 列出每個 bot 的排程（`monitor every 30m`、`digest at 09:00,18:00`、`sync cron */15 9-18 * * 1-5`，可加 `in=grok-bot-default`）。匯出檔沒有 bot 編號，所以報告會把每個排程和喚醒時間對起來，點名模型分組裡的 bot；剩下的是你自己的訊息和 bot 之間的通知。想先看結果，可以對 `python3 samples/make_grok_export.py` 產生的檔案，搭配 `samples/grok_schedules.txt` 執行同樣的指令（[備忘錄範例](../../docs/sample-memo-grok.zh-TW.md)）。
+`schedules.txt` 列出每個 bot 的排程（`monitor every 30m`、`digest at 09:00,18:00`、`sync cron */15 9-18 * * 1-5`，可加 `in=grok-bot-default`）。匯出檔沒有 bot 編號，所以報告會把每個排程和喚醒時間對起來，點名模型分組裡的 bot；剩下的是未歸屬流量（你的訊息、bot 之間的通知，以及事件觸發的自動化）。有事件開始時間時，用 `--events` 把事件觸發的連鎖喚醒歸給來源。想先看結果，可以對 `python3 samples/make_grok_export.py` 產生的檔案，搭配 `samples/grok_schedules.txt` 執行同樣的指令（[備忘錄範例](../../docs/sample-memo-grok.zh-TW.md)）。
 
 - prompt 分在三欄，所以 input = `Input (w/ Cache Write)` + `Input (w/o Cache Write)` + `Cache Read`，cached = `Cache Read`（input + output 等於 `Total Tokens`）。
 - 有 `Cloud Agent ID` 的資料列是一次性的雲端執行，不是常駐 bot，會排除。

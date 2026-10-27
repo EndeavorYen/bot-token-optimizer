@@ -34,7 +34,7 @@ python3 core/cli.py report usage-events.csv --platform grok-bot --tz +08:00 --qu
     --schedules schedules.txt --out memo.md
 ```
 
-`schedules.txt` lists each bot's schedule (`monitor every 30m`, `digest at 09:00,18:00`, `sync cron */15 9-18 * * 1-5`, optionally `in=grok-bot-default`). Since the export has no bot id, the report matches each schedule against the wake-up times to name the bots inside a model bucket; what is left is your own messages and bot-to-bot pings. To see the result before exporting your own data, run the same command on `python3 samples/make_grok_export.py` with `samples/grok_schedules.txt` ([sample memo](../../docs/sample-memo-grok.en.md)).
+`schedules.txt` lists each bot's schedule (`monitor every 30m`, `digest at 09:00,18:00`, `sync cron */15 9-18 * * 1-5`, optionally `in=grok-bot-default`). Since the export has no bot id, the report matches each schedule against the wake-up times to name the bots inside a model bucket; what is left is unattributed traffic (your messages, bot-to-bot pings, and event-triggered automations). `--events` names event-triggered chains when you have their start times. To see the result before exporting your own data, run the same command on `python3 samples/make_grok_export.py` with `samples/grok_schedules.txt` ([sample memo](../../docs/sample-memo-grok.en.md)).
 
 - The prompt is split over three columns, so input = `Input (w/ Cache Write)` + `Input (w/o Cache Write)` + `Cache Read`, and cached = `Cache Read` (input + output equals `Total Tokens`).
 - Rows with a `Cloud Agent ID` are one-shot cloud runs, not persistent bots, and are left out.

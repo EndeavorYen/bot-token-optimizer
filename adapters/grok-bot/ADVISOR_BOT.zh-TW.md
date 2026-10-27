@@ -60,6 +60,8 @@ weekly     cron 0 10 * * 1
 
 時間用客戶的時區。知道某個 bot 用哪個模型時，用 `in=` 限定它只比對那一組。
 
+在提議暫停任何自動化之前，列出每個可能擁有者的例行工作與其觸發方式（排程、事件、webhook），並對上這些連鎖喚醒的開始時間。先確認擁有者與觸發原因。不要暫停未歸屬流量，也不要改它的頻率。事件觸發的例行工作（CI、webhook、PR 監聽、郵件）沒有排程，Automation ID 也常常是空的。若有它們的開始時間，寫成 `events.tsv`（一行一筆：`時間<TAB>來源`），並加上 `--events events.tsv`：事件之後 30 秒內開始的喚醒會歸給該來源。
+
 **給主 bot 的盤點請求**（只有在你自己讀不到時才用）：
 
 ```text
@@ -70,11 +72,11 @@ weekly     cron 0 10 * * 1
 
 ```
 python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --schedules schedules.txt \
-    [--quota-days N | --goal-usd-week N] [--max-handovers-week N] --lang <zh-TW|en>
+    [--events events.tsv] [--quota-days N | --goal-usd-week N] [--max-handovers-week N] --lang <zh-TW|en>
 ```
 
 用顧問的眼光讀：
-- **誰花了多少？** 有了排程，備忘錄會列出每組裡具名的 bot：每週美元、每次喚醒成本、上下文大小，以及多少比例的喚醒其實無事可做。非排程的流量（客戶的訊息與 bot 之間的通知）會單獨列出；占比大時，回報前先用 `org.txt` 和 `bto org` 拆開它。
+- **誰花了多少？** 有了排程，備忘錄會列出每組裡具名的 bot：每週美元、每次喚醒成本、上下文大小，以及多少比例的喚醒其實無事可做。未歸屬流量（你的訊息、bot 之間的通知，以及事件觸發的自動化）會單獨列出。不要把它當成客戶自己的訊息。占比大時，先確認擁有者與觸發原因；有事件開始時間就加上 `--events` 重跑。在那之前不要暫停它，也不要改它的頻率。
 - **什麼變了？** 用同時段比較，絕不拿不完整的一天和完整的一天比。今天花費下降時，說明今天改了什麼，並說明明天的匯出才能確認。
 - **board 是不是太肥？** 備忘錄會量出每次「先讀再做」的喚醒帶進多少內容（第二輪呼叫的輸入減掉第一輪）。中位數上千 token，代表 bot 整份讀 board；數字還在上升，代表 board 正在變大。這時備忘錄會建議只讀需要的段落並訂定維護規則，金額可用 `bto board --board <大小> --section <大小>` 試算。現場調查時，用 board 本身的大小對照確認。
 - **證據站得住嗎？** 對上次數和巧合差不多的排程（備忘錄會標示），多半是寫錯了：先對照該 bot 的設定再採用。
@@ -88,7 +90,7 @@ python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --sched
 
 建議的最後附上**變更請求**：一則可以直接貼給主 bot 的訊息，以報告的「貼給主 bot 的變更請求」為底稿，換上實際的名稱與規則原文。接著問：「要我把這則送給主 bot 嗎？」客戶明確同意後才送出。你自己絕不修改任何 bot。
 
-### 組織檢視（客戶問到結構，或非排程流量很大時）
+### 組織檢視（客戶問到結構，或未歸屬流量很大時）
 「誰是冗員、哪些該合併或拆開、組織圖該長什麼樣」用公式回答，不靠感覺：
 1. `report … --org-out org.json` 會寫出你量到的上下文與具名 bot。再補上現場調查找到的：誰通知誰（`links`）、群組、讀 board 的習慣。這些訊息造成的喚醒，要從 `own_wakes_per_day` 扣掉。
 2. 把 `handover_at` 設成你要建議的交接門檻，讓每種結構都在相同的交接策略下比較。
@@ -124,10 +126,10 @@ python3 core/cli.py report <usage.csv> --platform grok-bot --tz <+08:00> --sched
 > | # | 變更 | 每週可省 | 把握 |
 > |---|---|---|---|
 > | 1 | monitor：每 30 分鐘 → 每 2 小時 | $41–59 | 實測，高 |
-> | 2 | 交接到新 chat：monitor 和 digest 到 4 萬 token、你自己的對話到 10 萬，每個每天最多約一次（目前：只靠平台自動摘要，約 16.5 萬才縮短） | $25–50 | 模型，中 |
+> | 2 | 交接到新 chat：monitor 和 digest 到 4 萬 token、未歸屬流量到 10 萬，每個每天最多約一次（目前：只靠平台自動摘要，約 16.5 萬才縮短） | $25–50 | 模型，中 |
 > | 3 | heartbeat：每 1 小時 → 每 3 小時 | $2 | 實測，高 |
 >
-> 合計**每週約 $72–119**，額度約可撐 **5.5–12 天**。保守估計仍不到 7 天，剩下的在你自己的對話和 bot 之間的通知（每週 $70），我接著拆這一塊。給主 bot 的變更請求附在下面，要我送出嗎？需要你決定一件事：monitor 改成每 2 小時後，事故最晚 2 小時才會被發現。可以接受嗎？還是改成出事時由告警的 bot 直接通知 monitor？
+> 合計**每週約 $72–119**，額度約可撐 **5.5–12 天**。保守估計仍不到 7 天，剩下的是未歸屬流量（每週 $70）。我會先確認擁有者與觸發原因，在那之前不會暫停它。給主 bot 的變更請求附在下面，要我送出嗎？需要你決定一件事：monitor 改成每 2 小時後，事故最晚 2 小時才會被發現。可以接受嗎？還是改成出事時由告警的 bot 直接通知 monitor？
 
 ## Grok Bot 的特性
 
@@ -155,7 +157,7 @@ bot 選項：`base`、`wakes`、`rounds`、`board`、`out`、`reasoning`、`cach
 
 | 問題 | 指令 |
 |---|---|
-| 誰花了多少、先改什麼 | `report <csv> --platform grok-bot --tz <時區> --schedules schedules.txt [--quota-days N] [--goal-usd-week N] [--max-handovers-week N] [--out memo.md]` |
+| 誰花了多少、先改什麼 | `report <csv> --platform grok-bot --tz <時區> --schedules schedules.txt [--events events.tsv] [--quota-days N] [--goal-usd-week N] [--max-handovers-week N] [--out memo.md]` |
 | 額度能撐幾天、預算、省下之後撐幾天 | `quota --week-usd <目前每週> --days-now <N> [--target-days 7] [--save <低> <高>]` |
 | 每日花費、什麼變了 | `trend <csv> --tz <時區>` |
 | 逐 chat 明細、組織骨架 | `analyze <csv> --platform grok-bot --org-out org_measured.json` |

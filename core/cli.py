@@ -2,7 +2,7 @@
 """bto — bot token optimizer command line.
 
     bto report usage.csv --platform grok-bot --goal-usd-week 300 --out memo.md   # one-page memo
-    bto report usage.csv --schedules schedules.txt --tz +08:00                  # split buckets into bots
+    bto report usage.csv --schedules schedules.txt --events events.tsv --tz +08:00  # name scheduled bots and event sources
     bto analyze usage.csv --platform grok-bot --org-out org.json
     bto trend usage.csv --tz +08:00
     bto init                      # describe your bots by answering questions
@@ -94,6 +94,8 @@ def build_parser():
     s.add_argument("--target-days", type=float, default=7, help="how many days the quota should last (default 7)")
     s.add_argument("--schedules", help="schedules file (one bot per line: NAME every 30m | at 09:00,18:00 | cron ...) "
                                        "to split buckets into bots")
+    s.add_argument("--events", help="events file (timestamp<TAB>source per line) attributing a wake-up that "
+                                    "starts 0–30 s after a logged event to that source")
     s.add_argument("--out", help="also write the memo to this file")
     s.add_argument("--org-out", help="write an org.json skeleton of the contexts and named bots (for bto redesign)")
 
@@ -241,10 +243,11 @@ def _run(a, lang, pricing, cap):
         overrides = dict(m.split("=", 1) for m in a.map)
         tz = None if a.tz is None else advise.parse_tz(a.tz)
         specs = schedules.load(a.schedules) if getattr(a, "schedules", None) else None
+        events = advise.load_events(a.events) if getattr(a, "events", None) else None
         rep = advise.report(a.csv, pricing, overrides, a.cached_separate, a.gap,
                             getattr(a, "goal_usd_week", None), tz, getattr(a, "handover_at", None), specs, lang,
                             getattr(a, "max_handovers_week", 7), getattr(a, "quota_days", None),
-                            getattr(a, "target_days", 7), a.max_gap)
+                            getattr(a, "target_days", 7), a.max_gap, events)
         if a.cmd == "trend":
             _dump(rep["trend"]) if a.json else print(advise.trend_md(rep["trend"], lang))
         else:
