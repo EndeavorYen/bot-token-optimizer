@@ -903,9 +903,11 @@ def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, go
                 if att["bots"]:
                     g["detail"] += t("g.att", lang, p=sched_share, n=sum(1 for b in att["bots"] if b["stats"]))
                 if att.get("events"):
-                    ev_share = sum(e["share"] for e in att["events"])
-                    g["detail"] += t("g.att_events", lang, p=ev_share,
-                                     n=sum(1 for e in att["events"] if e["stats"]))
+                    reliable_events = [e for e in att["events"] if e["reliable"]]
+                    ev_n = sum(1 for e in reliable_events if e["stats"])
+                    if ev_n:
+                        g["detail"] += t("g.att_events", lang,
+                                         p=sum(e["share"] for e in reliable_events), n=ev_n)
                 if att["matched_share"] >= 0.3 and g["severity"] == "high":
                     g["severity"] = "medium"
     inferred = None
