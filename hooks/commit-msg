@@ -1,0 +1,10 @@
+#!/bin/sh
+# Reject commit messages that carry a Co-authored-by trailer.
+# Local use: git config core.hooksPath hooks
+# CI runs the same check on pull requests and on pushes to branches other than the default branch.
+if grep -qi '^[[:space:]]*co-authored-by:' "$1"; then
+    echo "commit-msg: remove the Co-authored-by trailer; this repository does not accept them." >&2
+    grep -ni '^[[:space:]]*co-authored-by:' "$1" >&2
+    exit 1
+fi
+exit 0
