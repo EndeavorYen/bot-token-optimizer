@@ -310,10 +310,9 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
     A schedule matches from `early` seconds before the fire to `window` seconds after it.
     An event matches from `event_early` to `event_window` seconds after its timestamp
     (default 0–30 s). A tie goes to the name that sorts first, the same rule schedule
-    fires already use. What nothing claims stays unattributed. An event source that is
-    not reliable does not keep its wake-ups: matching runs again without it, so a
-    schedule or a reliable source can claim them. Only what is still unclaimed stays
-    in the remainder. The remainder mixes the user's messages, bot-to-bot pings and
+    fires already use. What nothing claims stays unattributed. An event source that
+    fails the chance check still keeps the wake-ups it matched and is marked not
+    reliable. The remainder mixes the user's messages, bot-to-bot pings and
     event-triggered automations, and this function does not say which.
     """
     wakes = _wakes(rows, gap)
@@ -346,50 +345,20 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
                 dist = abs((starts[i] - f).total_seconds())
                 pairs.append((dist, source, ("event", source, j), i))
     pairs.sort(key=lambda p: (p[0], p[1]))
+    taken_w, taken_f = set(), set()
+    got = {sp["name"]: [] for sp in specs}
+    got_event = {source: [] for source in by_source}
+    for _, _, key, i in pairs:
+        kind, name, _fire = key
+        if i in taken_w or key in taken_f:
+            continue
+        taken_w.add(i)
+        taken_f.add(key)
+        (got_event if kind == "event" else got)[name].append(i)
     span_s = max((t1 - t0).total_seconds(), 1.0)
 
     def reliable(n, chance):
         return n >= 5 and n >= 3 * chance
-
-    def event_chance(times):
-        # All wake-ups eligible before matching. The count left afterwards is ~0
-        # when the log is dense, which forces chance to 0 and marks the source reliable.
-        return _match_chance(len(wakes), span_s, event_early, event_window, len(times))
-
-    def assign(active):
-        taken_w, taken_f = set(), set()
-        got = {sp["name"]: [] for sp in specs}
-        got_event = {source: [] for source in by_source}
-        for _, _, key, i in active:
-            kind, name, _fire = key
-            if i in taken_w or key in taken_f:
-                continue
-            taken_w.add(i)
-            taken_f.add(key)
-            (got_event if kind == "event" else got)[name].append(i)
-        return got, got_event, taken_w
-
-    # A dense log can sit closer to a wake-up than the schedule that would have
-    # matched it. Drop every source that fails the chance check, then match again
-    # without those pairs so schedules and reliable sources can claim the wake-ups.
-    # Repeat until a pass drops nothing: a source kept this pass can only gain
-    # matches once a rejected log is gone.
-    rejected = set()
-    rejected_claim = {}
-    while True:
-        active = [p for p in pairs if not (p[2][0] == "event" and p[2][1] in rejected)]
-        got, got_event, taken_w = assign(active)
-        dropped = []
-        for source, times in by_source.items():
-            if source in rejected:
-                continue
-            claimed = got_event[source]
-            if not reliable(len(claimed), event_chance(times)):
-                dropped.append(source)
-                rejected_claim[source] = claimed
-        if not dropped:
-            break
-        rejected.update(dropped)
 
     bots = []
     for sp in specs:
@@ -406,31 +375,20 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
                      "units": sorted({wakes[i]["unit"] for i in got[sp["name"]]}), "stats": st})
     bots.sort(key=lambda b: -(b["stats"]["usd"] if b["stats"] else 0))
     event_rows = []
-    # Units whose rejected matches nobody else claimed, so the remainder still replaces the bucket.
-    released_units = set()
     for source, times in by_source.items():
-        chance = event_chance(times)
-        if source in rejected:
-            claimed = rejected_claim[source]
-            kept = []
-            is_reliable = False
-            for i in claimed:
-                if i not in taken_w:
-                    released_units.add(wakes[i]["unit"])
-        else:
-            kept = got_event[source]
-            claimed = kept
-            is_reliable = reliable(len(kept), chance)
+        # All wake-ups eligible before matching. The count left afterwards is ~0
+        # when the log is dense, which forces chance to 0 and marks the source reliable.
+        chance = _match_chance(len(wakes), span_s, event_early, event_window, len(times))
+        claimed = got_event[source]
         n = len(claimed)
-        st = wake_stats([wakes[i] for i in kept], pricing, has_cost, rate_days)
+        st = wake_stats([wakes[i] for i in claimed], pricing, has_cost, rate_days)
         event_rows.append({"name": source, "fires": len(times), "matched": n,
                            "match_rate": n / len(times) if times else 0.0,
-                           "chance_matches": chance, "reliable": is_reliable,
-                           "units": sorted({wakes[i]["unit"] for i in kept}), "stats": st})
+                           "chance_matches": chance, "reliable": reliable(n, chance),
+                           "units": sorted({wakes[i]["unit"] for i in claimed}), "stats": st})
     event_rows.sort(key=lambda e: -(e["stats"]["usd"] if e["stats"] else 0))
     touched = {u for b in bots for u in b["units"]}
     touched.update(u for e in event_rows for u in e["units"])
-    touched.update(released_units)
     remainder = []
     for unit in sorted(touched):
         rest = [w for i, w in enumerate(wakes) if w["unit"] == unit and i not in taken_w]
@@ -561,6 +519,15 @@ def handover_sweep(ents, pricing, freq_ratio=None, fixed=None, cap=MAX_HANDOVERS
     return sweep, picks, blocked
 
 
+def _named_in_cut(entity):
+    """Whether this driver may be named in a hotspot, decide-hot, or goal-cut line.
+
+    An unreliable event source keeps the wake-ups it matched. A dense log can still
+    take them from a schedule or a real source, so that source is not the cut.
+    """
+    return not (entity.get("kind") == "event" and not entity.get("reliable", True))
+
+
 def _entities(res, att, lang="en"):
     """The contexts to advise on: each unit, except that a bucket split by schedules or events is
     replaced by its scheduled bots, its event sources, and what is left (unattributed traffic)."""
@@ -594,7 +561,7 @@ def _entities(res, att, lang="en"):
         st = ev["stats"]
         if st:
             ents.append(dict({k: st[k] for k in keys}, name=ev["name"], unit=ev["units"][0], share=ev["share"],
-                             kind="event", sawtooth=False,
+                             kind="event", reliable=ev["reliable"], sawtooth=False,
                              growth_week=growth_week(st["growth_per_wake"], st["wakes_per_day"],
                                                      st["series_growth_per_day"])))
     for r in (att or {}).get("remainder", []):
@@ -791,7 +758,7 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
     # bot gets a judgment-tier action; a bucket that still mixes several bots is the next analysis step.
     # Unattributed traffic never becomes a pause or a frequency change: the only action is to confirm
     # the owner and the trigger first.
-    rest = [e for e in ents if e["name"] not in freq_bots]
+    rest = [e for e in ents if e["name"] not in freq_bots and _named_in_cut(e)]
     top = rest[0] if rest else None
     analysis_next = None
     if top and top["kind"] == "bucket" and top["share"] >= SPLIT_SHARE:
@@ -1170,7 +1137,7 @@ def memo_md(rep, lang="en"):
     dec = []
     nxt = pl.get("analysis_next")
     freq = {a["unit"] for a in pl["actions"] if a["code"] == "frequency"}
-    top = next((e for e in pl["entities"] if e["name"] not in freq), None)
+    top = next((e for e in pl["entities"] if e["name"] not in freq and _named_in_cut(e)), None)
     if nxt and nxt["kind"] == "split_bucket":
         dec.append(t("m.split_bucket", lang, unit=nxt["unit"], p=nxt["share"]))
     elif nxt and nxt["kind"] == "split_remainder":

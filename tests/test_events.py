@@ -23,6 +23,22 @@ OLD_EXCLUSIVE = "your messages and bot-to-bot pings"
 UNATTRIBUTED = "unattributed traffic (your messages, bot-to-bot pings, and event-triggered automations)"
 
 
+def _assert_conserved(test, rep):
+    """Each wake-up is counted once, and attributed spend plus the remainder equals the export."""
+    att = rep["attribution"]
+    matched = sum(b["matched"] for b in att["bots"]) + sum(e["matched"] for e in att["events"])
+    attributed = (sum(b["stats"]["wakes"] for b in att["bots"] if b["stats"])
+                  + sum(e["stats"]["wakes"] for e in att["events"] if e["stats"]))
+    remainder = sum(r["stats"]["wakes"] for r in att["remainder"])
+    total_wakes = sum(u["wakes"] for u in rep["analysis"]["units"])
+    test.assertEqual(matched, attributed)
+    test.assertEqual(attributed + remainder, total_wakes)
+    spend = (sum(b["stats"]["usd"] for b in att["bots"] if b["stats"])
+             + sum(e["stats"]["usd"] for e in att["events"] if e["stats"])
+             + sum(r["stats"]["usd"] for r in att["remainder"]))
+    test.assertAlmostEqual(spend, rep["analysis"]["total_usd"], places=6)
+
+
 def _write_fixture(directory):
     """Eight scheduled wakes, six two-call event chains, four interactive wakes."""
     rows = ["timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens"]
@@ -105,6 +121,18 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
         self.assertIn(UNATTRIBUTED, md)
         self.assertNotIn(OLD_EXCLUSIVE, md)
         self.assertIsNone(self._pause_requests(rep["plan"]["actions"]))
+        _assert_conserved(self, rep)
+
+    def test_each_wake_up_is_counted_once(self):
+        """Schedule, event source, and remainder partition the wake-ups and the spend."""
+        events = advise.load_events(self.events)
+        rep = advise.report(self.csv, PRICING, schedule_specs=self.specs, events=events)
+        att = rep["attribution"]
+        hourly = next(b for b in att["bots"] if b["name"] == "hourly")
+        matched = next(e for e in att["events"] if e["name"] == "reviewer-pr-listener")
+        remainder = sum(r["stats"]["wakes"] for r in att["remainder"])
+        self.assertEqual((hourly["matched"], matched["matched"], remainder), (8, 6, 4))
+        _assert_conserved(self, rep)
 
     def test_cli_events_flag(self):
         buf = io.StringIO()
@@ -161,7 +189,6 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
         """Same distance from a daily fire and an event: the name that sorts first wins.
 
         Six fires, so an event that wins every tie is reliable and keeps the wake-ups.
-        One fire is not enough: the event fails the chance check and the schedule matches again.
         """
         def assigned(event_name):
             directory = tempfile.mkdtemp()
@@ -187,13 +214,16 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
         self.assertEqual(assigned("zzz-event"), (6, 0, False))
         self.assertEqual(assigned("aaa-event"), (0, 6, True))
 
-    def test_reliable_source_reclaims_wakes_a_dense_log_took(self):
-        """A source that stays reliable gets the wake-ups a rejected log had taken."""
+    def test_dense_log_can_take_wakes_from_a_real_source(self):
+        """A dense log keeps the wake-ups that sit closer to it than to a real source.
+
+        Six wakes sit 2 s after ci-run, so ci-run keeps them and stays reliable.
+        Four sit 5 s from a 30 s grid point and 25 s from ci-run, so the dense log
+        keeps those. That steal is the known limit: nothing is rejected or re-matched.
+        """
         start = datetime(2026, 10, 12, tzinfo=timezone.utc)
         rows = ["timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens"]
         events = []
-        # Six wakes sit next to ci-run. The dense log is farther away, so ci-run keeps them
-        # and stays reliable. Four more sit closer to a 30 s grid point than to ci-run.
         for hour in range(6):
             ev = start + timedelta(hours=hour, seconds=10)
             wake = ev + timedelta(seconds=2)
@@ -221,11 +251,13 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
         att = rep["attribution"]
         ci = next(e for e in att["events"] if e["name"] == "ci-run")
         noisy = next(e for e in att["events"] if e["name"] == "noisy-webhook")
-        self.assertEqual(ci["matched"], 10)
+        self.assertEqual(ci["matched"], 6)
         self.assertTrue(ci["reliable"])
+        self.assertEqual(noisy["matched"], 4)
         self.assertFalse(noisy["reliable"])
-        self.assertIsNone(noisy["stats"])
+        self.assertEqual(noisy["stats"]["wakes"], 4)
         self.assertEqual(sum(r["stats"]["wakes"] for r in att["remainder"]), 0)
+        _assert_conserved(self, rep)
 
     def test_issue5_paste_lists_bots_not_event_sources(self):
         """Issue #5 repro: 7 days, one hourly bot, 70 interactive wakes, 30 overnight chains."""
@@ -271,16 +303,17 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
         self.assertNotIn("ci-run-created", paste)
 
     def test_dense_log_is_unreliable_and_not_a_cut_target(self):
-        """300 random wake-ups and one source logged every 30 s.
+        """50 random wake-ups and one source logged every 30 s.
 
-        Chance uses every wake-up eligible before matching, so the source is not
-        reliable. Its wake-ups stay unattributed: the memo has no hotspot and does
-        not name the source in a wake-less-often, decide-hot, or goal-cut line.
+        The log claims every wake-up. Chance uses every wake-up eligible before
+        matching, so it is about 50 and the source is not reliable. It keeps those
+        matches, and the memo does not name it in a wake-less-often, decide-hot,
+        or goal-cut line.
         """
         rng = random.Random(11)
         start = datetime(2026, 10, 1, tzinfo=timezone.utc)
         slot = 121
-        offsets = sorted(rng.sample(range(0, 7 * 24 * 3600 - slot, slot), 300))
+        offsets = sorted(rng.sample(range(0, 7 * 24 * 3600 - slot, slot), 50))
         rows = ["timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens"]
         for off in offsets:
             t = start + timedelta(seconds=off)
@@ -313,21 +346,24 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
         for lang, phrases in banned.items():
             rep = advise.report(csv_path, PRICING, events=events, goal_usd_week=1, lang=lang)
             ev = next(e for e in rep["attribution"]["events"] if e["name"] == "noisy-webhook")
+            self.assertEqual(ev["matched"], 50)
+            self.assertAlmostEqual(ev["chance_matches"], 50, delta=5)
             self.assertFalse(ev["reliable"])
-            self.assertIsNone(ev["stats"])
-            self.assertEqual(sum(r["stats"]["wakes"] for r in rep["attribution"]["remainder"]), 300)
+            self.assertEqual(ev["stats"]["wakes"], 50)
+            self.assertEqual(sum(r["stats"]["wakes"] for r in rep["attribution"]["remainder"]), 0)
             self.assertNotIn("hotspot", {a["code"] for a in rep["plan"]["actions"]})
             self.assertNotEqual((rep["plan"]["goal"] or {}).get("hotspot_unit"), "noisy-webhook")
             md = advise.memo_md(rep, lang)
             for phrase in phrases:
                 self.assertNotIn(phrase, md)
+            _assert_conserved(self, rep)
 
-    def test_rejected_dense_log_returns_wakes_to_the_schedule(self):
+    def test_hourly_bot_dense_webhook_is_not_named_as_a_cut(self):
         """Hourly wake-ups 45 s after each fire, and one source logged every 30 s.
 
-        The dense log is not reliable. Matching again without it gives those
-        wake-ups back to the schedule, which stays reliable. The memo does not
-        name the source in a hotspot, decide-hot, or goal-cut line.
+        The webhook is closer, so it keeps the wake-ups and the bot's count drops.
+        That steal is the known limit. The webhook is not reliable, and the memo
+        does not name it in a hotspot, decide-hot, or goal-cut line.
         """
         start = datetime(2026, 10, 1, tzinfo=timezone.utc)
         rows = ["timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens"]
@@ -374,18 +410,21 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
             att = rep["attribution"]
             hourly = next(b for b in att["bots"] if b["name"] == "hourly")
             self.assertEqual(hourly["fires"], 168)
-            self.assertGreaterEqual(hourly["matched"], 167)
-            self.assertTrue(hourly["reliable"])
+            self.assertLess(hourly["matched"], bare_bot["matched"])
             ev = next(e for e in att["events"] if e["name"] == "webhook")
             self.assertFalse(ev["reliable"])
-            self.assertIsNone(ev["stats"])
+            self.assertGreater(ev["matched"], 0)
+            self.assertEqual(ev["stats"]["wakes"], ev["matched"])
             self.assertNotEqual((rep["plan"]["goal"] or {}).get("hotspot_unit"), "webhook")
             for action in rep["plan"]["actions"]:
                 if action["code"] == "hotspot":
                     self.assertNotEqual(action["unit"], "webhook")
+                if action["code"] == "frequency":
+                    self.assertNotEqual(action["unit"], "webhook")
             md = advise.memo_md(rep, lang)
             for phrase in phrases:
                 self.assertNotIn(phrase, md)
+            _assert_conserved(self, rep)
 
     def test_sixty_second_log_over_random_traffic_is_not_the_hotspot(self):
         """A weak event every 60 s over random traffic stays unreliable and unnamed as a cut."""
@@ -426,7 +465,7 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
             rep = advise.report(csv_path, PRICING, events=events, goal_usd_week=1, lang=lang)
             ev = next(e for e in rep["attribution"]["events"] if e["name"] == "weak-log")
             self.assertFalse(ev["reliable"])
-            self.assertIsNone(ev["stats"])
+            self.assertEqual(ev["stats"]["wakes"], ev["matched"])
             self.assertNotIn("hotspot", {a["code"] for a in rep["plan"]["actions"]})
             self.assertNotEqual((rep["plan"]["goal"] or {}).get("hotspot_unit"), "weak-log")
             md = advise.memo_md(rep, lang)
