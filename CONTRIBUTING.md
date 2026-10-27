@@ -9,7 +9,7 @@ The most valuable contribution right now is **real data**. The model is calibrat
 - **Add a platform.** Create `core/platforms/<name>.json` (span limit, pricing preset) and, if the platform has a different price list, `core/pricing/<model>.json` with a `source` URL and a `checked` date. Then run `python docs/calculator/build_presets.py`.
 - **Code changes.** Keep the standard library only. Add tests (`python -m unittest discover -s tests`). If you change a formula, port it to `docs/calculator/calc.js` too; `node tests/calculator_parity.mjs` must pass. If figures change, run `python docs/images/make_figures.py`; if reports change, run `python docs/make_memos.py` to regenerate the sample memos and redesign.
 - **Docs** come in English and 繁體中文; please update both, or say in the PR which one is missing.
-- **Commit messages** must not contain `Co-authored-by:` trailers, including ones added by AI coding tools; CI rejects them. Run `git config core.hooksPath hooks` to catch them before you commit, and turn off co-author attribution in your tool's settings.
+- **Commit messages** must not contain `Co-authored-by:` trailers, including ones added by AI coding tools. CI rejects them on pull requests and on pushes to branches other than `main`. Run `git config core.hooksPath hooks` to catch them before you commit, and turn off co-author attribution in your tool's settings. A squash merge must use an explicit commit message with no `Co-authored-by:` line: GitHub inserts those lines automatically, so delete them before confirming. The push to `main` does not run this check, so that automatic line cannot turn `main` red.
 
 Never upload real conversations or anything that identifies people or customers. Token counts and timestamps are enough.
 
@@ -22,6 +22,6 @@ Never upload real conversations or anything that identifies people or customers.
 - **新增平台。** 建立 `core/platforms/<名稱>.json`（控制幅度上限、價格設定）；如果價格不同，加上 `core/pricing/<模型>.json`，並附上 `source` 網址和 `checked` 日期，然後執行 `python docs/calculator/build_presets.py`。
 - **程式修改。** 只使用 Python 標準函式庫，並附上測試（`python -m unittest discover -s tests`）。改了公式，請一併修改 `docs/calculator/calc.js`，確保 `node tests/calculator_parity.mjs` 通過；圖表有變動時，執行 `python docs/images/make_figures.py`；報告內容有變動時，執行 `python docs/make_memos.py` 重新產生範例備忘錄與範例改組。
 - **文件**有英文和繁體中文兩個版本，請兩邊一起更新，或在 PR 中註明缺少哪一個。
-- **Commit 訊息**不得含有 `Co-authored-by:` trailer（包括 AI 程式工具自動加上的），CI 會擋下。執行 `git config core.hooksPath hooks` 可在提交前先檢查，並請在所用工具的設定中關閉 co-author 署名。
+- **Commit 訊息**不得含有 `Co-authored-by:` trailer（包括 AI 程式工具自動加上的）。CI 會在 pull request，以及推送到 `main` 以外的分支時擋下。執行 `git config core.hooksPath hooks` 可在提交前先檢查，並請在所用工具的設定中關閉 co-author 署名。Squash merge 必須使用明確的 commit 訊息，且不得含有 `Co-authored-by:`：GitHub 會自動插入這些行，確認前請刪除。推送到 `main` 不會執行這項檢查，因此自動插入的行不會讓 `main` 變紅。
 
 請勿上傳真實對話內容，或任何能辨識個人、客戶的資訊。token 數量和時間戳記就足夠了。
