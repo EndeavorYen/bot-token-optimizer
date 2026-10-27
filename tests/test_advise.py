@@ -1,4 +1,5 @@
 """Consultant layer: cost anatomy, data gaps, trend, ranked plan and the one-page memo."""
+import csv
 import io
 import json
 import math
@@ -449,6 +450,158 @@ class TestQuota(unittest.TestCase):
         self.assertIn("the quota lasts 3 days", md)
         self.assertIn("Days the quota lasts", md)
         self.assertAlmostEqual(rep["plan"]["goal"]["target"], rep["plan"]["usd_per_week"] * 3 / 7)
+
+
+GROK_START = datetime(2026, 10, 12, tzinfo=timezone.utc)
+
+
+def _drop_window(src, dst, start, lo_days, hi_days):
+    """Copy a usage CSV without rows in [start+lo, start+hi)."""
+    lo = start + timedelta(days=lo_days)
+    hi = start + timedelta(days=hi_days)
+    with open(src, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+    kept = [rows[0]]
+    for r in rows[1:]:
+        t = datetime.fromisoformat(r[0].replace("Z", "+00:00"))
+        if lo <= t < hi:
+            continue
+        kept.append(r)
+    with open(dst, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f, quoting=csv.QUOTE_ALL).writerows(kept)
+    return dst
+
+
+def _uniform_gap_csv(path):
+    """Hourly calls, one 72 h zero-row stretch, constant token size. No real user data."""
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    stamps = [start + timedelta(hours=h) for h in range(48)]
+    stamps += [start + timedelta(hours=119 + h) for h in range(25)]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["timestamp", "bot", "chat_id", "input_tokens", "cached_input_tokens", "output_tokens"])
+        for t in stamps:
+            w.writerow([t.strftime("%Y-%m-%dT%H:%M:%SZ"), "meter", "c1", 1000, 200, 50])
+    return path, start
+
+
+class TestQuotaExhaustionGap(unittest.TestCase):
+    """A multi-day zero-row stretch is quota exhaustion, not a slower week."""
+
+    @classmethod
+    def setUpClass(cls):
+        tmp = tempfile.mkdtemp()
+        cls.tz = advise.parse_tz("+08:00")
+        cls.full = make_grok_export.generate(os.path.join(tmp, "full.csv"))
+        cls.gap = _drop_window(cls.full, os.path.join(tmp, "gap.csv"), GROK_START, 2.5, 5.5)
+        cls.full_rep = advise.report(cls.full, PRICING, tz=cls.tz, quota_days=3)
+        cls.gap_rep = advise.report(cls.gap, PRICING, tz=cls.tz, quota_days=3)
+        cls.uniform, cls.uniform_start = _uniform_gap_csv(os.path.join(tmp, "uniform.csv"))
+        cls.uniform_rep = advise.report(cls.uniform, PRICING, tz=cls.tz)
+
+    def test_weekly_rate_quota_and_savings_match_the_ungapped_export(self):
+        full, gap = self.full_rep["plan"], self.gap_rep["plan"]
+        self.assertAlmostEqual(gap["usd_per_week"], full["usd_per_week"], delta=0.05 * full["usd_per_week"])
+        self.assertEqual(gap["quota"]["days_now"], 3)
+        self.assertAlmostEqual(gap["quota"]["budget_usd_week"], full["quota"]["budget_usd_week"],
+                               delta=0.05 * full["quota"]["budget_usd_week"])
+        for key in ("days_after_low", "days_after_high"):
+            self.assertAlmostEqual(gap["quota"][key], full["quota"][key], delta=0.05 * abs(full["quota"][key]) + 0.05)
+        full_s = {a["code"]: a["usd_week_high"] for a in full["actions"]}
+        gap_s = {a["code"]: a["usd_week_high"] for a in gap["actions"]}
+        for code, usd in full_s.items():
+            self.assertIn(code, gap_s)
+            self.assertAlmostEqual(gap_s[code], usd, delta=0.15 * usd + 0.05)
+        self.assertAlmostEqual(gap["combined_low"], full["combined_low"], delta=0.15 * full["combined_low"] + 0.05)
+        self.assertAlmostEqual(gap["combined_high"], full["combined_high"], delta=0.15 * full["combined_high"] + 0.05)
+        # a passed --quota-days is not replaced by the measured cycle
+        self.assertIsNone(self.gap_rep["quota_inferred"])
+
+    def test_report_names_gap_dates_length_and_denominator(self):
+        res = self.gap_rep["analysis"]
+        self.assertEqual(len(res["usage_gaps"]), 1)
+        g = res["usage_gaps"][0]
+        self.assertGreater(g["days"], 3.0)
+        self.assertLess(g["days"], 3.5)
+        self.assertAlmostEqual(res["active_days"], res["span_days"] - g["days"], places=6)
+        self.assertGreater(res["span_days"], res["active_days"] + 2)
+        md = advise.memo_md(self.gap_rep, "en")
+        start = datetime.fromisoformat(g["start"]).astimezone(self.tz).strftime("%Y-%m-%d %H:%M")
+        end = datetime.fromisoformat(g["end"]).astimezone(self.tz).strftime("%Y-%m-%d %H:%M")
+        self.assertIn(start, md)
+        self.assertIn(end, md)
+        self.assertIn(f"{g['days']:.1f}", md)
+        self.assertIn(f"{res['active_days']:.1f} active days", md)
+        self.assertIn(f"{res['span_days']:.1f}", md)
+        zh = advise.memo_md(self.gap_rep, "zh-TW")
+        self.assertIn("額度缺口", zh)
+        self.assertIn(f"{res['active_days']:.1f}", zh)
+
+    def test_trend_lists_missing_days_and_does_not_call_the_gap_a_drop(self):
+        tr = self.gap_rep["trend"]
+        missing = [e for e in tr["days"] if e["calls"] == 0]
+        self.assertGreaterEqual(len(missing), 2)
+        self.assertTrue(all(e["nodata"] and e["usd"] == 0 and e["wakes"] == 0 for e in missing))
+        text = advise.trend_md(tr, "en")
+        self.assertIn("no data", text)
+        self.assertIn("active days", text)
+        ch = {c["unit"]: c for c in tr["changes"]}["grok-bot-default"]
+        self.assertGreater(ch["usd_day_after"], ch["usd_day_before"] * 0.9)
+
+        utr = self.uniform_rep["trend"]
+        self.assertGreaterEqual(sum(1 for e in utr["days"] if e["nodata"]), 2)
+        uch = utr["changes"][0]
+        self.assertLess(abs(uch["usd_day_after"] - uch["usd_day_before"]) / uch["usd_day_before"], 0.1)
+        # the same rows over the calendar span would report a much cheaper week
+        span = self.uniform_rep["analysis"]["span_days"]
+        active = self.uniform_rep["analysis"]["active_days"]
+        diluted = self.uniform_rep["analysis"]["total_usd"] * 7 / span
+        self.assertLess(diluted, self.uniform_rep["plan"]["usd_per_week"] * 0.7)
+        self.assertAlmostEqual(self.uniform_rep["plan"]["usd_per_week"],
+                               self.uniform_rep["analysis"]["total_usd"] * 7 / active, places=6)
+
+    def test_synthetic_gap_reports_one_quota_cycle(self):
+        res = self.uniform_rep["analysis"]
+        self.assertEqual(len(res["quota_cycles"]), 1)
+        c = res["quota_cycles"][0]
+        per = orgopt.call_cost_usd(1000, 200, 50, PRICING)
+        self.assertTrue(c["partial"])
+        self.assertAlmostEqual(c["days"], 47 / 24, places=6)
+        self.assertEqual(c["tokens"], 48 * 1050)
+        self.assertAlmostEqual(c["usd"], 48 * per, places=6)
+        self.assertAlmostEqual(self.uniform_rep["plan"]["quota"]["days_now"], c["days"], places=6)
+        self.assertEqual(self.uniform_rep["quota_inferred"]["partial"], True)
+        md = advise.memo_md(self.uniform_rep, "en")
+        self.assertIn("partial cycle", md)
+        self.assertIn(f"{c['tokens']:,.0f}", md)
+        self.assertIn(f"${c['usd']:,.2f}", md)
+        self.assertIn(f"{c['days']:.1f}", md)
+
+    def test_gap_shorter_than_max_gap_does_not_change_the_denominator(self):
+        wide = advise.report(self.gap, PRICING, tz=self.tz, quota_days=3, max_gap_hours=1000)
+        self.assertEqual(wide["analysis"]["usage_gaps"], [])
+        self.assertAlmostEqual(wide["analysis"]["active_days"], wide["analysis"]["span_days"])
+        self.assertLess(wide["plan"]["usd_per_week"], self.full_rep["plan"]["usd_per_week"] * 0.75)
+
+    def test_export_without_a_gap_is_unchanged(self):
+        res = self.full_rep["analysis"]
+        self.assertEqual(res["usage_gaps"], [])
+        self.assertEqual(res["quota_cycles"], [])
+        self.assertAlmostEqual(res["active_days"], res["span_days"])
+        md = advise.memo_md(self.full_rep, "en")
+        self.assertNotIn("active days", md)
+        self.assertNotIn("Quota gap", md)
+        self.assertIn("Weekly figures = period × 7 / days.", md)
+        text = advise.trend_md(self.full_rep["trend"], "en")
+        self.assertNotIn("no data", text)
+        self.assertNotIn("active days", text)
+
+    def test_cli_trend_shows_the_gap(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(cli.main(["trend", self.gap, "--tz", "+08:00", "--max-gap", "12"]), 0)
+        self.assertIn("no data", buf.getvalue())
+        self.assertIn("active days", buf.getvalue())
 
 
 if __name__ == "__main__":

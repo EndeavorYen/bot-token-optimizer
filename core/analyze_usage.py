@@ -47,6 +47,7 @@ SPLIT_LABEL = " + ".join(SPLIT_INPUT)
 CLOUD_AGENT_COL = "Cloud Agent ID"   # rows with an id here are one-shot cloud runs, not persistent bots
 RESET_DROP = 0.6        # a wake-up whose context is < 60% of the previous one ...
 RESET_MIN = 5000        # ... and at least 5K tokens smaller counts as a hand-over
+DEFAULT_MAX_GAP_HOURS = 12.0   # a zero-row stretch longer than this is quota exhaustion, not idle time
 
 
 class UsageError(ValueError):
@@ -249,6 +250,69 @@ def fetch_stats(read_first_wakes):
             "fetch_trend": statistics.median(late) / m0 if m0 else 1.0}
 
 
+def detect_usage_gaps(rows, max_gap_hours=DEFAULT_MAX_GAP_HOURS):
+    """Zero-row stretches longer than `max_gap_hours` between consecutive calls.
+
+    Each gap runs from the last call before the silence to the first call after it.
+    A quota that runs out leaves exactly this shape: no rows until the next reset."""
+    if max_gap_hours < 0:
+        raise ValueError("max-gap must be >= 0 hours")
+    limit = max_gap_hours * 3600
+    gaps = []
+    for a, b in zip(rows, rows[1:]):
+        seconds = (b["time"] - a["time"]).total_seconds()
+        if seconds > limit:
+            gaps.append({"start": a["time"], "end": b["time"], "seconds": seconds, "days": seconds / 86400})
+    return gaps
+
+
+def active_elapsed_days(t, t0, gaps):
+    """Days from `t0` to `t` with detected zero-row gaps removed."""
+    seconds = (t - t0).total_seconds()
+    for g in gaps:
+        if g["end"] <= t:
+            seconds -= g["seconds"]
+        elif g["start"] < t:
+            seconds -= (t - g["start"]).total_seconds()
+            break
+    return seconds / 86400
+
+
+def quota_cycles(rows, gaps, pricing, has_cost):
+    """One measured cycle per gap: spend and tokens from the previous resume (or the export
+    start, flagged partial) up to the call that precedes the silence."""
+    if not rows or not gaps:
+        return []
+    cycles, resume, partial = [], rows[0]["time"], True
+    for g in gaps:
+        window = [r for r in rows if resume <= r["time"] <= g["start"]]
+        if has_cost:
+            usd = sum(r["cost"] for r in window)
+        else:
+            usd = sum(orgopt.call_cost_usd(r["input"], r["cached"], r["output"] + r.get("reasoning", 0.0), pricing)
+                      for r in window)
+        tokens = sum(r["input"] + r["output"] + r.get("reasoning", 0.0) for r in window)
+        cycles.append({"start": resume.isoformat(), "end": g["start"].isoformat(),
+                       "days": (g["start"] - resume).total_seconds() / 86400,
+                       "usd": usd, "tokens": tokens, "partial": partial})
+        resume, partial = g["end"], False
+    return cycles
+
+
+def _public_gaps(gaps):
+    return [{"start": g["start"].isoformat(), "end": g["end"].isoformat(), "days": g["days"]} for g in gaps]
+
+
+def span_and_active_days(t0, t1, gaps):
+    """Calendar span and the rate denominator (span minus zero-row gaps), both in days."""
+    span_seconds = (t1 - t0).total_seconds()
+    span_days = max(span_seconds / 86400, 1 / 24)
+    if not gaps:
+        return span_days, span_days
+    active = max((span_seconds - sum(g["seconds"] for g in gaps)) / 86400, 1 / 24)
+    return span_days, active
+
+
 def sessionize(rows, gap_seconds):
     """Consecutive calls of one context no more than `gap` apart form one wake-up."""
     wakes, cur = [], []
@@ -297,13 +361,16 @@ def assign_units(rows):
 
 
 def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80, soft_cap=None,
-            has_cost=False, lang="en"):
+            has_cost=False, lang="en", max_gap_hours=DEFAULT_MAX_GAP_HOURS):
     thr = pricing.get("long_context_threshold") or math.inf
     if not rows:
         raise UsageError(t("u.err_empty", lang))
     assign_units(rows)
     t0, t1 = rows[0]["time"], rows[-1]["time"]
-    span_days = max((t1 - t0).total_seconds() / 86400, 1 / 24)
+    raw_gaps = detect_usage_gaps(rows, max_gap_hours)
+    # Rates use time the export actually covers. A multi-day hole is the quota being empty,
+    # and folding it into the denominator makes the same pace look cheaper.
+    span_days, active_days = span_and_active_days(t0, t1, raw_gaps)
     by_unit = {}
     for r in rows:
         by_unit.setdefault(r["unit"], []).append(r)
@@ -318,7 +385,7 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
             for j, r in enumerate(w):
                 r["wake_start"] = j == 0
         ctx = [w[0]["input"] for w in wakes]
-        days = [(w[0]["time"] - t0).total_seconds() / 86400 for w in wakes]
+        days = [active_elapsed_days(w[0]["time"], t0, raw_gaps) for w in wakes]
         growth, segments = growth_per_day(days, ctx)
         last = ctx[split_resets(days, ctx)[-1][0]:]
         c_now = statistics.median(last[-max(3, len(last) // 5):])
@@ -348,7 +415,7 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
             return (target - c_now) / growth if growth > 0 else math.inf
 
         units.append({
-            "unit": name, "calls": len(rs), "wakes": len(wakes), "wakes_per_day": len(wakes) / span_days,
+            "unit": name, "calls": len(rs), "wakes": len(wakes), "wakes_per_day": len(wakes) / active_days,
             "rounds_per_wake": len(rs) / len(wakes), "C_now": c_now, "C_max": max(ctx),
             "C_growth_per_day": growth, "resets_seen": len(segments) - 1, "segments": segments,
             "days_to_long_context": days_to(thr), "days_to_soft_cap": days_to(soft_cap) if soft_cap else None,
@@ -396,6 +463,8 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
                 "miss_premium_usd", "in_wake_miss_premium_usd", "short_wake_usd", "read_first_usd")}
     return {"calibration": calibrate(units, total_usd, pricing), "anatomy": anatomy, "has_cost": has_cost,
             "period_start": t0.isoformat(), "period_end": t1.isoformat(), "span_days": span_days,
+            "active_days": active_days, "usage_gaps": _public_gaps(raw_gaps),
+            "quota_cycles": quota_cycles(rows, raw_gaps, pricing, has_cost),
             "total_usd": total_usd, "rows": len(rows), "units": units,
             "findings": [dict(zip(("type", "unit", "detail", "usd", "advice"), f)) for f in findings]}
 
@@ -430,7 +499,11 @@ def org_skeleton(res, horizon_days=7, lang="en"):
 
 def report_md(res, lang="en"):
     L = [f"## {t('u.title', lang, start=res['period_start'][:16], end=res['period_end'][:16], days=res['span_days'], rows=res['rows'])}",
-         "", t("u.total", lang, usd=res["total_usd"]), "", t("u.unit_note", lang), "",
+         ""]
+    if res.get("usage_gaps"):
+        items = "; ".join(f"{g['start'][:16]} – {g['end'][:16]} ({g['days']:.1f} d)" for g in res["usage_gaps"])
+        L += [t("u.gap_note", lang, items=items, active=res["active_days"], span=res["span_days"]), ""]
+    L += [t("u.total", lang, usd=res["total_usd"]), "", t("u.unit_note", lang), "",
          t("u.header", lang), "|---|---|---|---|---|---|---|---|---|---|"]
     for u in res["units"]:
         L.append(f"| {u['unit']} | {u['share']:.0%} | {u['calls']} | {u['wakes_per_day']:.1f} | {u['rounds_per_wake']:.1f} | "
@@ -473,10 +546,12 @@ def notes(mapping, skipped, lang="en", info=None):
     return out
 
 
-def run(csv_path, pricing, overrides=None, cached_separate=False, gap=120, soft_cap=None, lang="en"):
+def run(csv_path, pricing, overrides=None, cached_separate=False, gap=120, soft_cap=None, lang="en",
+        max_gap_hours=DEFAULT_MAX_GAP_HOURS):
     info = {}
     rows, mapping, skipped = load_rows(csv_path, overrides, cached_separate, lang, info)
-    res = analyze(rows, pricing, gap, soft_cap=soft_cap, has_cost="cost" in mapping, lang=lang)
+    res = analyze(rows, pricing, gap, soft_cap=soft_cap, has_cost="cost" in mapping, lang=lang,
+                  max_gap_hours=max_gap_hours)
     res["column_mapping"], res["skipped_rows"], res["load_info"] = mapping, skipped, info
     return res
 

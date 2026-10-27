@@ -123,7 +123,7 @@
 
 ## 步驟 4：第一次正式使用
 
-1. 從 Grok Bot 的用量頁面匯出 **usage events** CSV（欄位開頭是 `Date, Cloud Agent ID, Automation ID, …`；介面名稱可能略有不同）。期間選**最近 7 天**最好；少於 2 天的話，趨勢會不準。
+1. 從 Grok Bot 的用量頁面匯出 **usage events** CSV（欄位開頭是 `Date, Cloud Agent ID, Automation ID, …`；介面名稱可能略有不同）。期間選**最近 7 天**最好；少於 2 天的話，趨勢會不準。匯出時記下用量頁面上的額度剩餘百分比和重置時間，跟檔案一起附上。
 2. 開一個和 Token 顧問的**新 chat**，附上檔案並貼上（把空格填好，不知道的可以刪掉）：
 
    ```text
