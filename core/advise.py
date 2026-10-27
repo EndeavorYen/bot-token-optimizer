@@ -9,7 +9,8 @@
 
 Every number comes from analyze_usage / orgopt; this module only ranks and words them.
 Weekly rates, savings and quota math use active time: the calendar span minus
-zero-row gaps longer than `--max-gap` (default 12 h).
+quota-exhaustion gaps. A silence longer than `--max-gap` (default 12 h) counts
+only when it breaks the export's own daily or weekly activity clock.
 Evidence tiers:
     measured  dollars already spent on the pattern in the export (range: remove half to all of it)
     modeled   cost-model projection (confidence drops when calibration is off by more than 15%)
@@ -732,10 +733,13 @@ def kpis(res, pl, pricing, tz=timezone.utc, lang="en"):
 
 # ---------------------------------------------------------------- report / memo
 def _infer_quota_days(cycles):
-    """Latest complete cycle, or the latest partial one when the export never shows a full reset."""
-    usable = [c for c in cycles if c["days"] > 0]
-    complete = [c for c in usable if not c["partial"]]
-    return (complete or usable)[-1] if usable else None
+    """Latest complete cycle between real gaps.
+
+    The cycle before the first gap starts at the export boundary and is partial, so it is
+    not a measured quota. Quota days are inferred only once a later gap closes a full cycle.
+    """
+    complete = [c for c in cycles if not c["partial"] and c["days"] > 0]
+    return complete[-1] if complete else None
 
 
 def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, goal_usd_week=None,
@@ -763,13 +767,17 @@ def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, go
                 if att["matched_share"] >= 0.3 and g["severity"] == "high":
                     g["severity"] = "medium"
     inferred = None
+    quota_omitted = None
     if quota_days is None:
         inferred = _infer_quota_days(res.get("quota_cycles") or [])
         if inferred:
+            inferred = dict(inferred, days=round(inferred["days"], 1))
             quota_days = inferred["days"]
+        elif not res.get("usage_gaps"):
+            quota_omitted = "no_gap"
     pl = plan(res, tr, gl, pricing, goal_usd_week, handover_at, att, lang, max_handovers_week, quota_days, target_days)
     return {"analysis": res, "trend": tr, "gaps": gl, "plan": pl, "attribution": att,
-            "quota_inferred": inferred,
+            "quota_inferred": inferred, "quota_omitted": quota_omitted,
             "kpis": kpis(res, pl, pricing, tz, lang),
             "pricing": {"model": pricing.get("model", "?"), **pricing["per_million"],
                         "long_context_threshold": pricing.get("long_context_threshold")},
@@ -855,6 +863,8 @@ def memo_md(rep, lang="en"):
     L += ["", t("m.conf", lang, c=t(f"m.lvl.{pl['confidence']}", lang),
                why=t("m.conf_why", lang, why=("；" if zh else "; ").join(why)) if why else ""), ""]
 
+    if rep.get("quota_omitted") == "no_gap":
+        L += [t("m.quota_omitted", lang), ""]
     if res.get("usage_gaps"):
         L += [f"### {t('m.quota_gap', lang)}", ""]
         for g in res["usage_gaps"]:

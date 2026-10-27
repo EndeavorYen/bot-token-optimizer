@@ -569,10 +569,13 @@ class TestQuotaExhaustionGap(unittest.TestCase):
         self.assertAlmostEqual(c["days"], 47 / 24, places=6)
         self.assertEqual(c["tokens"], 48 * 1050)
         self.assertAlmostEqual(c["usd"], 48 * per, places=6)
-        self.assertAlmostEqual(self.uniform_rep["plan"]["quota"]["days_now"], c["days"], places=6)
-        self.assertEqual(self.uniform_rep["quota_inferred"]["partial"], True)
+        # one real gap, but the cycle before it starts at the export boundary (partial),
+        # so quota days are not inferred
+        self.assertIsNone(self.uniform_rep["plan"]["quota"])
+        self.assertIsNone(self.uniform_rep["quota_inferred"])
         md = advise.memo_md(self.uniform_rep, "en")
         self.assertIn("partial cycle", md)
+        self.assertNotIn("95% less", md)
         self.assertIn(f"{c['tokens']:,.0f}", md)
         self.assertIn(f"${c['usd']:,.2f}", md)
         self.assertIn(f"{c['days']:.1f}", md)
@@ -602,6 +605,109 @@ class TestQuotaExhaustionGap(unittest.TestCase):
             self.assertEqual(cli.main(["trend", self.gap, "--tz", "+08:00", "--max-gap", "12"]), 0)
         self.assertIn("no data", buf.getvalue())
         self.assertIn("active days", buf.getvalue())
+
+
+def _write_calls(path, stamps):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["timestamp", "bot", "chat_id", "input_tokens", "cached_input_tokens", "output_tokens"])
+        for t in stamps:
+            w.writerow([t.strftime("%Y-%m-%dT%H:%M:%SZ"), "meter", "c1", 1000, 200, 50])
+    return path
+
+
+def _long_silences(path, hours=12):
+    rows, _, _ = analyze_usage.load_rows(path)
+    limit = hours * 3600
+    return [(b["time"] - a["time"]).total_seconds()
+            for a, b in zip(rows, rows[1:])
+            if (b["time"] - a["time"]).total_seconds() > limit]
+
+
+def _office_hours_csv(path, days=14):
+    """Weekday calls every 15 minutes, 09:00–18:00 UTC. Nights are 15 h, weekends 63 h."""
+    start = datetime(2026, 10, 12, tzinfo=timezone.utc)  # Monday
+    stamps = []
+    for d in range(days):
+        day = start + timedelta(days=d)
+        if day.weekday() >= 5:
+            continue
+        for hour in range(9, 19):
+            minutes = (0,) if hour == 18 else (0, 15, 30, 45)
+            for minute in minutes:
+                stamps.append(day.replace(hour=hour, minute=minute))
+    return _write_calls(path, stamps)
+
+
+def _twice_daily_csv(path, days=14):
+    """One call at 09:00 and one at 18:00 every day, including weekends. Nights are 15 h."""
+    start = datetime(2026, 10, 12, tzinfo=timezone.utc)
+    stamps = []
+    for d in range(days):
+        day = start + timedelta(days=d)
+        for hour in (9, 18):
+            stamps.append(day.replace(hour=hour))
+    return _write_calls(path, stamps)
+
+
+class TestScheduledIdleIsNotQuotaGap(unittest.TestCase):
+    """Overnight and weekend quiet match the export's own clock, so they are not exhaustion."""
+
+    def _assert_idle_keeps_the_span_rate(self, path, night=True, weekend=False):
+        silences = _long_silences(path)
+        self.assertTrue(silences)
+        if night:
+            self.assertTrue(any(14 * 3600 <= s <= 16 * 3600 for s in silences))
+        if weekend:
+            self.assertTrue(any(60 * 3600 <= s <= 66 * 3600 for s in silences))
+        rep = advise.report(path, PRICING)
+        res = rep["analysis"]
+        self.assertEqual(res["usage_gaps"], [])
+        self.assertEqual(res["quota_cycles"], [])
+        self.assertAlmostEqual(res["active_days"], res["span_days"])
+        self.assertAlmostEqual(rep["plan"]["usd_per_week"], res["total_usd"] * 7 / res["span_days"], places=6)
+        idle_days = sum(silences) / 86400
+        buggy = res["total_usd"] * 7 / (res["span_days"] - idle_days)
+        self.assertGreater(buggy, rep["plan"]["usd_per_week"] * 1.2)
+        self.assertIsNone(rep["plan"]["quota"])
+        self.assertIsNone(rep["quota_inferred"])
+        md = advise.memo_md(rep, "en")
+        self.assertIn("Quota days are omitted", md)
+        self.assertNotIn("Quota gap", md)
+        self.assertNotIn("0.375", md)
+        self.assertNotIn("95% less", md)
+        self.assertIn("Weekly figures = period × 7 / days.", md)
+
+    def test_weekday_office_hours_nights_and_weekends_are_not_gaps(self):
+        path = _office_hours_csv(os.path.join(tempfile.mkdtemp(), "office.csv"))
+        self._assert_idle_keeps_the_span_rate(path, night=True, weekend=True)
+
+    def test_twice_daily_nights_are_not_gaps(self):
+        path = _twice_daily_csv(os.path.join(tempfile.mkdtemp(), "twice.csv"))
+        self._assert_idle_keeps_the_span_rate(path, night=True, weekend=False)
+
+    def test_complete_cycle_quota_days_are_rounded(self):
+        """Two exhaustion holes close one full cycle; the printed quota days are rounded to 1 decimal."""
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        stamps, t = [], start
+        for hours, pause in ((48, 72), (48, 72), (24, 0)):
+            for _ in range(hours):
+                stamps.append(t)
+                t += timedelta(hours=1)
+            t += timedelta(hours=pause - 1) if pause else timedelta(0)
+        path = _write_calls(os.path.join(tempfile.mkdtemp(), "cycles.csv"), stamps)
+        rep = advise.report(path, PRICING)
+        cycles = rep["analysis"]["quota_cycles"]
+        self.assertEqual(len(rep["analysis"]["usage_gaps"]), 2)
+        self.assertEqual([c["partial"] for c in cycles], [True, False])
+        raw = cycles[1]["days"]
+        self.assertNotEqual(raw, round(raw, 1))
+        self.assertEqual(rep["quota_inferred"]["days"], round(raw, 1))
+        self.assertFalse(rep["quota_inferred"]["partial"])
+        self.assertEqual(rep["plan"]["quota"]["days_now"], round(raw, 1))
+        md = advise.memo_md(rep, "en")
+        self.assertIn(f"Quota days ({round(raw, 1):.1f})", md)
+        self.assertNotIn(f"{raw:.5f}", md)
 
 
 if __name__ == "__main__":

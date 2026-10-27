@@ -16,7 +16,7 @@ import csv
 import json
 import math
 import statistics
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 try:
     from . import orgopt
@@ -47,7 +47,8 @@ SPLIT_LABEL = " + ".join(SPLIT_INPUT)
 CLOUD_AGENT_COL = "Cloud Agent ID"   # rows with an id here are one-shot cloud runs, not persistent bots
 RESET_DROP = 0.6        # a wake-up whose context is < 60% of the previous one ...
 RESET_MIN = 5000        # ... and at least 5K tokens smaller counts as a hand-over
-DEFAULT_MAX_GAP_HOURS = 12.0   # a zero-row stretch longer than this is quota exhaustion, not idle time
+DEFAULT_MAX_GAP_HOURS = 12.0   # shorter silences are never quota gaps; longer ones still have to break the export's own clock
+EXPECTED_ACTIVE_HOURS = 3       # hours of predicted activity inside a silence before it counts as exhaustion
 
 
 class UsageError(ValueError):
@@ -250,20 +251,77 @@ def fetch_stats(read_first_wakes):
             "fetch_trend": statistics.median(late) / m0 if m0 else 1.0}
 
 
-def detect_usage_gaps(rows, max_gap_hours=DEFAULT_MAX_GAP_HOURS):
-    """Zero-row stretches longer than `max_gap_hours` between consecutive calls.
+def _activity_clock(rows):
+    """Hours and weekdays the export actually uses.
 
-    Each gap runs from the last call before the silence to the first call after it.
-    A quota that runs out leaves exactly this shape: no rows until the next reset."""
+    An hour-of-day is active when it has calls on at least half as many dates as the busiest hour.
+    A weekday is on when it has calls on at least half as many dates as the busiest weekday.
+    The weekly off, when there is one, is the single pair of consecutive weekdays with no rows
+    (overnight quiet is not a whole empty weekday; a weekend is)."""
+    by_hour = [set() for _ in range(24)]
+    by_wday = [set() for _ in range(7)]
+    for r in rows:
+        t = r["time"]
+        by_hour[t.hour].add(t.date())
+        by_wday[t.weekday()].add(t.date())
+    peak_h = max(len(s) for s in by_hour)
+    peak_d = max(len(s) for s in by_wday)
+
+    def keeps(n, peak):
+        return n >= max(1, math.ceil(peak * 0.5))
+
+    active_hours = {h for h, s in enumerate(by_hour) if keeps(len(s), peak_h)}
+    on_days = {d for d, s in enumerate(by_wday) if keeps(len(s), peak_d)}
+    off = [d for d in range(7) if d not in on_days]
+    weekly_off = set()
+    if len(off) == 2:
+        a, b = off
+        if b - a == 1 or {a, b} == {0, 6}:
+            weekly_off = {a, b}
+    return active_hours, weekly_off
+
+
+def _expected_active_hours(start, end, active_hours, weekly_off):
+    """Full clock hours inside (start, end) where this export's own pattern says a call belongs.
+
+    A weekday with no rows still counts, unless it is one of the two empty weekdays that form
+    the weekly off. That is what separates a weekend from a day the quota wiped out."""
+    t = start.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    step = timedelta(hours=1)
+    n = 0
+    while t + step <= end:
+        if t.hour in active_hours and t.weekday() not in weekly_off:
+            n += 1
+        t += step
+    return n
+
+
+def detect_usage_gaps(rows, max_gap_hours=DEFAULT_MAX_GAP_HOURS):
+    """Zero-row stretches that are quota exhaustion, not the export's own idle time.
+
+    A silence longer than `max_gap_hours` is only a candidate. It counts when at least
+    `EXPECTED_ACTIVE_HOURS` hours inside it are hours this export is normally busy
+    (see `_activity_clock`). Overnight quiet and a two-day weekly off match that clock
+    and are not gaps. Each gap runs from the last call before the silence to the first
+    call after it.
+
+    Rows have no quota, limit or error field, and no plan cap, so those signals are not
+    available; the break in the export's own daily/weekly clock is the evidence used."""
     if max_gap_hours < 0:
         raise ValueError("max-gap must be >= 0 hours")
+    if len(rows) < 2:
+        return []
     limit = max_gap_hours * 3600
-    gaps = []
+    candidates = []
     for a, b in zip(rows, rows[1:]):
         seconds = (b["time"] - a["time"]).total_seconds()
         if seconds > limit:
-            gaps.append({"start": a["time"], "end": b["time"], "seconds": seconds, "days": seconds / 86400})
-    return gaps
+            candidates.append({"start": a["time"], "end": b["time"], "seconds": seconds, "days": seconds / 86400})
+    if not candidates:
+        return []
+    active_hours, weekly_off = _activity_clock(rows)
+    return [g for g in candidates
+            if _expected_active_hours(g["start"], g["end"], active_hours, weekly_off) >= EXPECTED_ACTIVE_HOURS]
 
 
 def active_elapsed_days(t, t0, gaps):
@@ -368,8 +426,8 @@ def analyze(rows, pricing, gap_seconds=120, ack_output=30, read_first_output=80,
     assign_units(rows)
     t0, t1 = rows[0]["time"], rows[-1]["time"]
     raw_gaps = detect_usage_gaps(rows, max_gap_hours)
-    # Rates use time the export actually covers. A multi-day hole is the quota being empty,
-    # and folding it into the denominator makes the same pace look cheaper.
+    # Rates use time the export actually covers. A hole that breaks the export's own clock
+    # is the quota being empty, and folding it into the denominator makes the same pace look cheaper.
     span_days, active_days = span_and_active_days(t0, t1, raw_gaps)
     by_unit = {}
     for r in rows:
