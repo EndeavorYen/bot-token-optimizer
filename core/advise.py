@@ -596,9 +596,13 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
             named = [e["name"] for e, _, _ in big if e["kind"] in ("bot", "context")]
             if any(e["kind"] in ("bucket", "remainder") for e, _, _ in big):
                 named.append(t("p.req.board_readers", lang))
-            a["request"] = [t("p.board_trim.req_read", lang, names=sep_.join(named)),
-                            t("p.board_trim.req_keep", lang, sec=f"{BOARD_SECTION:,.0f}",
-                              cap=f"{BOARD_CAP:,.0f}")]
+            # event sources are not named; skip the read line when nothing is left to name
+            reqs = []
+            if named:
+                reqs.append(t("p.board_trim.req_read", lang, names=sep_.join(named)))
+            reqs.append(t("p.board_trim.req_keep", lang, sec=f"{BOARD_SECTION:,.0f}",
+                          cap=f"{BOARD_CAP:,.0f}"))
+            a["request"] = reqs
             a["per_unit"] = [{"unit": e["name"], "fetch_p50": e["fetch_p50"], "section": sec,
                               "usd_week": o["saving_section_usd_week"]} for e, o, sec in big]
             # a smaller board also slows the context's growth, so the hand-overs below are priced on it

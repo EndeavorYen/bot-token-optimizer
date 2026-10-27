@@ -142,6 +142,55 @@ class TestBoardAdvice(unittest.TestCase):
             paste = md.split(headings[lang], 1)[1].split("\n## ", 1)[0]
             self.assertNotIn("board-webhook", paste)
             self.assertIn("board-archive", paste)
+            # an event-only reader list is empty, so the read rule is omitted rather than
+            # printed with a blank name ("of :" / "（）")
+            empty = {"en": "Add to the instructions of :", "zh-TW": "（）"}
+            self.assertNotIn(empty[lang], paste)
+
+    def test_board_trim_paste_names_bot_not_event(self):
+        """A bot and an event can both read the board; the paste names only the bot."""
+        directory = tempfile.mkdtemp()
+        csv_path = os.path.join(directory, "b.csv")
+        src = bloated_board_csv(os.path.join(directory, "src.csv"))
+        with open(src, newline="", encoding="utf-8") as f:
+            planner_rows = list(csv.DictReader(f))
+        relay_rows = []
+        for row in planner_rows:
+            copy = dict(row)
+            copy["bot_name"] = "relay"
+            when = analyze_usage.parse_time(row["timestamp"]) + timedelta(minutes=40)
+            copy["timestamp"] = when.isoformat()
+            relay_rows.append(copy)
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=planner_rows[0].keys())
+            writer.writeheader()
+            writer.writerows(planner_rows + relay_rows)
+        events_path = os.path.join(directory, "events.tsv")
+        with open(events_path, "w", encoding="utf-8") as f:
+            for row in relay_rows:
+                if row["output_tokens"] != "20":
+                    continue
+                when = analyze_usage.parse_time(row["timestamp"]) - timedelta(seconds=2)
+                f.write(f"{when.strftime('%Y-%m-%dT%H:%M:%SZ')}\tboard-webhook\n")
+        rep = advise.report(csv_path, PRICING, events=advise.load_events(events_path))
+        trim = next(a for a in rep["plan"]["actions"] if a["code"] == "board_trim")
+        readers = {u["unit"] for u in trim["per_unit"]}
+        self.assertIn("planner", readers)
+        self.assertIn("board-webhook", readers)
+        titles = {"en": "Keep the board small", "zh-TW": "讓 board 保持精簡"}
+        headings = {"en": "### Paste to the main bot", "zh-TW": "### 貼給主 bot 的變更請求"}
+        empty = {"en": "Add to the instructions of :", "zh-TW": "（）"}
+        for lang in ("en", "zh-TW"):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.main(["report", csv_path, "--events", events_path, "--lang", lang])
+            self.assertEqual(rc, 0)
+            md = buf.getvalue()
+            self.assertIn(titles[lang], md)
+            paste = md.split(headings[lang], 1)[1].split("\n## ", 1)[0]
+            self.assertIn("planner", paste)
+            self.assertNotIn("board-webhook", paste)
+            self.assertNotIn(empty[lang], paste)
 
 
 class TestRedesignBoard(unittest.TestCase):
