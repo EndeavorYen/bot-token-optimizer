@@ -117,6 +117,32 @@ class TestBoardAdvice(unittest.TestCase):
         codes = {a["code"] for a in advise.report(p, PRICING)["plan"]["actions"]}
         self.assertNotIn("board_trim", codes)
 
+    def test_board_trim_paste_omits_event_sources(self):
+        """A logged event source that reads the board is not named in the paste-in request."""
+        directory = tempfile.mkdtemp()
+        csv_path = bloated_board_csv(os.path.join(directory, "b.csv"))
+        events_path = os.path.join(directory, "events.tsv")
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        with open(events_path, "w", encoding="utf-8") as f:
+            for row in rows:
+                if row["output_tokens"] != "20":
+                    continue
+                when = analyze_usage.parse_time(row["timestamp"]) - timedelta(seconds=2)
+                f.write(f"{when.strftime('%Y-%m-%dT%H:%M:%SZ')}\tboard-webhook\n")
+        titles = {"en": "Keep the board small", "zh-TW": "讓 board 保持精簡"}
+        headings = {"en": "### Paste to the main bot", "zh-TW": "### 貼給主 bot 的變更請求"}
+        for lang in ("en", "zh-TW"):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.main(["report", csv_path, "--events", events_path, "--lang", lang])
+            self.assertEqual(rc, 0)
+            md = buf.getvalue()
+            self.assertIn(titles[lang], md)
+            paste = md.split(headings[lang], 1)[1].split("\n## ", 1)[0]
+            self.assertNotIn("board-webhook", paste)
+            self.assertIn("board-archive", paste)
+
 
 class TestRedesignBoard(unittest.TestCase):
     def test_trim_move(self):

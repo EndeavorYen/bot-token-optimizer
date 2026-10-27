@@ -593,7 +593,7 @@ def plan(res, tr, gap_list, pricing, goal_usd_week=None, handover_at=None, att=N
         a = add("board_trim", ", ".join(e["name"] for e, _, _ in big), hi / 2, hi, "medium", "medium", "modeled",
                 items=items, sec=f"{BOARD_SECTION:,.0f}", grow=grow)
         if a:
-            named = [e["name"] for e, _, _ in big if e["kind"] in ("bot", "context", "event")]
+            named = [e["name"] for e, _, _ in big if e["kind"] in ("bot", "context")]
             if any(e["kind"] in ("bucket", "remainder") for e, _, _ in big):
                 named.append(t("p.req.board_readers", lang))
             a["request"] = [t("p.board_trim.req_read", lang, names=sep_.join(named)),
