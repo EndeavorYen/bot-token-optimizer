@@ -101,13 +101,17 @@ def _active_midpoint(t0, t1, gaps):
 
 
 # ---------------------------------------------------------------- trend
-def trend(rows, pricing, has_cost=False, tz=timezone.utc, max_gap_hours=None):
-    """Rows must already have gone through analyze_usage.analyze (unit and wake_start set)."""
+def trend(rows, pricing, has_cost=False, tz=None, max_gap_hours=None):
+    """Rows must already have gone through analyze_usage.analyze (unit and wake_start set).
+
+    `tz` None means display in UTC and judge quota gaps on the quiet-point frame.
+    A tz value is both the display clock and the gap clock."""
+    display = timezone.utc if tz is None else tz
     t0, t1 = rows[0]["time"], rows[-1]["time"]
-    first, last = t0.astimezone(tz), t1.astimezone(tz)
+    first, last = t0.astimezone(display), t1.astimezone(display)
     days = {}
     for r in rows:
-        lt = r["time"].astimezone(tz)
+        lt = r["time"].astimezone(display)
         d = lt.date().isoformat()
         e = days.setdefault(d, {"date": d, "usd": 0.0, "calls": 0, "wakes": 0, "units": {}})
         c = _row_usd(r, pricing, has_cost)
@@ -138,14 +142,14 @@ def trend(rows, pricing, has_cost=False, tz=timezone.utc, max_gap_hours=None):
     if first.date() <= yday:
         cutoff = last.time()
         y_usd = sum(_row_usd(r, pricing, has_cost) for r in rows
-                    if r["time"].astimezone(tz).date() == yday and r["time"].astimezone(tz).time() <= cutoff)
+                    if r["time"].astimezone(display).date() == yday and r["time"].astimezone(display).time() <= cutoff)
         t_usd = days[last.date().isoformat()]["usd"]
         same = {"day": last.date().isoformat(), "until": last.strftime("%H:%M"), "today_usd": t_usd,
                 "yesterday_usd": y_usd, "change": (t_usd - y_usd) / y_usd if y_usd else math.nan,
                 "yesterday_partial": first.date() == yday}
 
     raw_gaps = analyze_usage.detect_usage_gaps(
-        rows, analyze_usage.DEFAULT_MAX_GAP_HOURS if max_gap_hours is None else max_gap_hours)
+        rows, analyze_usage.DEFAULT_MAX_GAP_HOURS if max_gap_hours is None else max_gap_hours, tz=tz)
     span_days, active_days = analyze_usage.span_and_active_days(t0, t1, raw_gaps)
     total = sum(e["usd"] for e in table)
     changes = []
@@ -167,9 +171,9 @@ def trend(rows, pricing, has_cost=False, tz=timezone.utc, max_gap_hours=None):
                             "context_before": c0 / w0 if w0 else 0.0, "context_after": c1 / w1 if w1 else 0.0})
         changes.sort(key=lambda c: -abs(c["usd_day_after"] - c["usd_day_before"]))
     usage_gaps = [{"start": g["start"].isoformat(), "end": g["end"].isoformat(), "days": g["days"],
-                   "start_local": g["start"].astimezone(tz).strftime("%Y-%m-%d %H:%M"),
-                   "end_local": g["end"].astimezone(tz).strftime("%Y-%m-%d %H:%M")} for g in raw_gaps]
-    return {"tz": _tz_name(tz), "days": table, "same_window": same, "changes": changes[:5],
+                   "start_local": g["start"].astimezone(display).strftime("%Y-%m-%d %H:%M"),
+                   "end_local": g["end"].astimezone(display).strftime("%Y-%m-%d %H:%M")} for g in raw_gaps]
+    return {"tz": _tz_name(display), "days": table, "same_window": same, "changes": changes[:5],
             "span_days": span_days, "active_days": active_days, "usage_gaps": usage_gaps,
             "usd_per_day": total / active_days, "usd_per_week": total / active_days * 7}
 
@@ -743,23 +747,27 @@ def _infer_quota_days(cycles):
 
 
 def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, goal_usd_week=None,
-           tz=timezone.utc, handover_at=None, schedule_specs=None, lang="en",
+           tz=None, handover_at=None, schedule_specs=None, lang="en",
            max_handovers_week=MAX_HANDOVERS_WEEK, quota_days=None, target_days=7,
            max_gap_hours=None):
-    """Everything the memo needs. `schedule_specs` (from schedules.load) splits buckets into bots."""
+    """Everything the memo needs. `schedule_specs` (from schedules.load) splits buckets into bots.
+
+    `tz` None displays days in UTC and judges quota gaps on the quiet-point frame. A tz value
+    is the clock for both."""
     if max_gap_hours is None:
         max_gap_hours = analyze_usage.DEFAULT_MAX_GAP_HOURS
+    display_tz = timezone.utc if tz is None else tz
     info = {}
     rows, mapping, skipped = analyze_usage.load_rows(csv_path, overrides, cached_separate, lang, info)
     res = analyze_usage.analyze(rows, pricing, gap, has_cost="cost" in mapping, lang=lang,
-                                max_gap_hours=max_gap_hours)
+                                max_gap_hours=max_gap_hours, tz=tz)
     res["column_mapping"], res["skipped_rows"], res["load_info"] = mapping, skipped, info
     from_model = {r["unit"] for r in rows if r.get("bot_from_model")}
     for u in res["units"]:
         u["from_model"] = u["unit"] in from_model
     tr = trend(rows, pricing, "cost" in mapping, tz, max_gap_hours)
     gl = gaps(res, mapping, info, lang)
-    att = attribute(rows, res, schedule_specs, pricing, "cost" in mapping, tz, gap) if schedule_specs else None
+    att = attribute(rows, res, schedule_specs, pricing, "cost" in mapping, display_tz, gap) if schedule_specs else None
     if att:
         for g in gl:
             if g["code"] in ("bot_empty", "no_bot"):
@@ -778,10 +786,10 @@ def report(csv_path, pricing, overrides=None, cached_separate=False, gap=120, go
     pl = plan(res, tr, gl, pricing, goal_usd_week, handover_at, att, lang, max_handovers_week, quota_days, target_days)
     return {"analysis": res, "trend": tr, "gaps": gl, "plan": pl, "attribution": att,
             "quota_inferred": inferred, "quota_omitted": quota_omitted,
-            "kpis": kpis(res, pl, pricing, tz, lang),
+            "kpis": kpis(res, pl, pricing, display_tz, lang),
             "pricing": {"model": pricing.get("model", "?"), **pricing["per_million"],
                         "long_context_threshold": pricing.get("long_context_threshold")},
-            "gap_seconds": gap, "tz": tz}
+            "gap_seconds": gap, "tz": display_tz}
 
 
 def org_skeleton(rep, horizon_days=7):

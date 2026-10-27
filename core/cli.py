@@ -65,7 +65,9 @@ def build_parser():
     s.add_argument("--cached-separate", action="store_true", help="cached tokens are NOT included in the input column")
     s.add_argument("--gap", type=float, default=120, help="seconds between calls that still count as one wake-up")
     s.add_argument("--max-gap", type=float, default=analyze_usage.DEFAULT_MAX_GAP_HOURS,
-                   help="hours; a zero-row stretch longer than this is a quota-gap candidate and counts only when it covers hours this export is normally busy (default 12)")
+                   help="hours; a zero-row stretch longer than this is a quota-gap candidate and counts only when it covers hours this export is normally busy (default 12). "
+                        "Days and hours use --tz when set, otherwise the quiet-point clock; a rest block is 1-3 consecutive weekdays, "
+                        "and in a one-week export a whole-day outage is treated as a rest day")
     s.add_argument("--soft-cap", type=float, help="context quality soft cap (tokens)")
     s.add_argument("--org-out", help="write an org.json skeleton here")
     s.add_argument("--json", action="store_true")
@@ -76,8 +78,10 @@ def build_parser():
         s.add_argument("--cached-separate", action="store_true", help="cached tokens are NOT included in the input column")
         s.add_argument("--gap", type=float, default=120, help="seconds between calls that still count as one wake-up")
         s.add_argument("--max-gap", type=float, default=analyze_usage.DEFAULT_MAX_GAP_HOURS,
-                       help="hours; a zero-row stretch longer than this is a quota-gap candidate and counts only when it covers hours this export is normally busy (default 12)")
-        s.add_argument("--tz", default="UTC", help="time zone for days, e.g. +08:00 (default UTC)")
+                       help="hours; a zero-row stretch longer than this is a quota-gap candidate and counts only when it covers hours this export is normally busy (default 12). "
+                            "Days and hours use --tz when set, otherwise the quiet-point clock; a rest block is 1-3 consecutive weekdays, "
+                            "and in a one-week export a whole-day outage is treated as a rest day")
+        s.add_argument("--tz", default=None, help="time zone for days, e.g. +08:00 (default UTC)")
         s.add_argument("--json", action="store_true")
 
     s = sub.add_parser("report", parents=[common], help="one-page consultant memo from a usage CSV")
@@ -235,7 +239,7 @@ def _run(a, lang, pricing, cap):
             print(analyze_usage.report_md(res, lang))
     elif a.cmd in ("report", "trend"):
         overrides = dict(m.split("=", 1) for m in a.map)
-        tz = advise.parse_tz(a.tz)
+        tz = None if a.tz is None else advise.parse_tz(a.tz)
         specs = schedules.load(a.schedules) if getattr(a, "schedules", None) else None
         rep = advise.report(a.csv, pricing, overrides, a.cached_separate, a.gap,
                             getattr(a, "goal_usd_week", None), tz, getattr(a, "handover_at", None), specs, lang,
