@@ -405,7 +405,7 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
     return {"bots": bots, "events": event_rows, "remainder": remainder, "touched_units": sorted(touched),
             "window_s": window, "early_s": early,
             "event_window_s": event_window, "event_early_s": event_early,
-            "matched_share": sum(b["share"] for b in bots) + sum(e["share"] for e in event_rows)}
+            "matched_share": sum(b["share"] for b in bots) + sum(e["share"] for e in event_rows if e["reliable"])}
 
 
 # ---------------------------------------------------------------- data gaps
