@@ -6,6 +6,7 @@ unattributed remainder.
 """
 import io
 import os
+import random
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -222,3 +223,55 @@ class TestUnscheduledTrafficOwner(unittest.TestCase):
         paste = md.split("### Paste to the main bot", 1)[1].split("\n## ", 1)[0]
         self.assertIn("hourly", paste)
         self.assertNotIn("ci-run-created", paste)
+
+    def test_dense_log_is_unreliable_and_not_a_cut_target(self):
+        """300 random wake-ups and one source logged every 30 s.
+
+        Chance uses every wake-up eligible before matching, so the source is not
+        reliable. Its wake-ups stay unattributed: the memo has no hotspot and does
+        not name the source in a wake-less-often, decide-hot, or goal-cut line.
+        """
+        rng = random.Random(11)
+        start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        slot = 121
+        offsets = sorted(rng.sample(range(0, 7 * 24 * 3600 - slot, slot), 300))
+        rows = ["timestamp,automation_id,model,input_tokens,cached_tokens,output_tokens"]
+        for off in offsets:
+            t = start + timedelta(seconds=off)
+            rows.append(f"{t.strftime('%Y-%m-%dT%H:%M:%SZ')},,demo-model,20000,0,200")
+        directory = tempfile.mkdtemp()
+        csv_path = os.path.join(directory, "usage.csv")
+        events_path = os.path.join(directory, "events.tsv")
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(rows) + "\n")
+        end = start + timedelta(seconds=offsets[-1])
+        with open(events_path, "w", encoding="utf-8") as f:
+            t = start
+            while t <= end:
+                f.write(f"{t.strftime('%Y-%m-%dT%H:%M:%SZ')}\tnoisy-webhook\n")
+                t += timedelta(seconds=30)
+        events = advise.load_events(events_path)
+        banned = {
+            "en": (
+                "Wake noisy-webhook less often",
+                "Decide whether noisy-webhook's wake-up frequency",
+                "fewer wake-ups of noisy-webhook",
+            ),
+            "zh-TW": (
+                "減少 noisy-webhook 的喚醒次數",
+                "決定 noisy-webhook 的喚醒頻率",
+                "減少 noisy-webhook 的喚醒",
+                "noisy-webhook 的喚醒再減少",
+            ),
+        }
+        for lang, phrases in banned.items():
+            rep = advise.report(csv_path, PRICING, events=events, goal_usd_week=1, lang=lang)
+            ev = next(e for e in rep["attribution"]["events"] if e["name"] == "noisy-webhook")
+            self.assertFalse(ev["reliable"])
+            self.assertIsNone(ev["stats"])
+            self.assertEqual(sum(r["stats"]["wakes"] for r in rep["attribution"]["remainder"]), 300)
+            self.assertNotIn("hotspot", {a["code"] for a in rep["plan"]["actions"]})
+            self.assertNotEqual((rep["plan"]["goal"] or {}).get("hotspot_unit"), "noisy-webhook")
+            md = advise.memo_md(rep, lang)
+            for phrase in phrases:
+                self.assertNotIn(phrase, md)

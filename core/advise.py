@@ -310,9 +310,10 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
     A schedule matches from `early` seconds before the fire to `window` seconds after it.
     An event matches from `event_early` to `event_window` seconds after its timestamp
     (default 0–30 s). A tie goes to the name that sorts first, the same rule schedule
-    fires already use. What nothing claims stays unattributed. That remainder mixes the
-    user's messages, bot-to-bot pings and event-triggered automations, and this function
-    does not say which.
+    fires already use. What nothing claims stays unattributed. An event source that is
+    not reliable does not claim its wake-ups either: they stay in that remainder, not
+    under the source's name. The remainder mixes the user's messages, bot-to-bot pings
+    and event-triggered automations, and this function does not say which.
     """
     wakes = _wakes(rows, gap)
     starts = [w["start"] for w in wakes]
@@ -374,18 +375,29 @@ def attribute(rows, res, specs, pricing, has_cost=False, tz=timezone.utc, gap=12
                      "units": sorted({wakes[i]["unit"] for i in got[sp["name"]]}), "stats": st})
     bots.sort(key=lambda b: -(b["stats"]["usd"] if b["stats"] else 0))
     event_rows = []
+    # Units whose matches were rejected, so the remainder still replaces the bucket.
+    released_units = set()
     for source, times in by_source.items():
-        free = sum(1 for i in range(len(wakes)) if i not in taken_w)
-        chance = _match_chance(free, span_s, event_early, event_window, len(times))
+        # All wake-ups eligible before matching. The count left afterwards is ~0
+        # when the log is dense, which forces chance to 0 and marks the source reliable.
+        chance = _match_chance(len(wakes), span_s, event_early, event_window, len(times))
+        claimed = got_event[source]
+        n = len(claimed)
+        is_reliable = reliable(n, chance)
+        if not is_reliable:
+            for i in claimed:
+                taken_w.discard(i)
+                released_units.add(wakes[i]["unit"])
+            got_event[source] = []
         st = wake_stats([wakes[i] for i in got_event[source]], pricing, has_cost, rate_days)
-        n = len(got_event[source])
         event_rows.append({"name": source, "fires": len(times), "matched": n,
                            "match_rate": n / len(times) if times else 0.0,
-                           "chance_matches": chance, "reliable": reliable(n, chance),
+                           "chance_matches": chance, "reliable": is_reliable,
                            "units": sorted({wakes[i]["unit"] for i in got_event[source]}), "stats": st})
     event_rows.sort(key=lambda e: -(e["stats"]["usd"] if e["stats"] else 0))
     touched = {u for b in bots for u in b["units"]}
     touched.update(u for e in event_rows for u in e["units"])
+    touched.update(released_units)
     remainder = []
     for unit in sorted(touched):
         rest = [w for i, w in enumerate(wakes) if w["unit"] == unit and i not in taken_w]
@@ -1042,7 +1054,7 @@ def memo_md(rep, lang="en"):
             st = ev["stats"]
             label = t("m.event", lang)
             if not st:
-                L.append(f"| {ev['name']} | {label} | 0 / {ev['fires']} | | | | | |")
+                L.append(f"| {ev['name']} | {label} | {ev['matched']} / {ev['fires']} | | | | | |")
                 continue
             L.append(f"| {ev['name']} | {label} | {ev['matched']} / {ev['fires']} | {_usd(st['usd_week'])} | "
                      f"{ev['share']:.0%} | ${st['per_wake']:,.3f} | {st['C_p50']:,.0f} | {st['idle_share']:.0%} |")
